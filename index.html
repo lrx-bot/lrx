@@ -1,0 +1,2237 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title data-i18n="title">复函数四维数据的任意三维投影</title>
+<meta name="description" data-i18n-desc="metaDesc" content="在浏览器中交互式可视化复函数：从 Re w、Im w、Re f、Im f、|f| 中任选三个维度投影到三维空间，支持任意复表达式输入、多函数与多视角叠加。">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌀</text></svg>">
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #0b0e17; font-family: "PingFang SC", "Microsoft YaHei", sans-serif; }
+  #app { position: relative; width: 100%; height: 100%; }
+  #canvas-wrap { position: absolute; inset: 0; display: block; z-index: 0; }
+  #canvas-wrap.stereo { display: flex; }
+  .screen { position: absolute; inset: 0; }
+  /* 单眼模式下右屏容器默认隐藏：否则绝对定位全屏覆盖会拦截主画布的鼠标事件 */
+  #screen-r { display: none; }
+  #canvas-wrap.stereo #screen-r { display: block; }
+  #canvas-wrap.stereo .screen { position: relative; flex: 1 1 50%; min-width: 0; overflow: hidden; }
+  #canvas-wrap.stereo #screen-r { border-left: 2px solid rgba(255,255,255,0.25); }
+  .screen canvas { width: 100% !important; height: 100% !important; display: block; }
+  .eye-tag {
+    position: absolute; top: 10px; left: 50%; transform: translateX(-50%);
+    font-size: 12px; color: #7fd8e9; letter-spacing: 2px;
+    background: rgba(20,26,44,0.7); border: 1px solid rgba(127,216,233,0.35);
+    border-radius: 8px; padding: 3px 12px; pointer-events: none; z-index: 2;
+    display: none;
+  }
+  #canvas-wrap.stereo .eye-tag { display: block; }
+  canvas { display: block; }
+
+  .panel {
+    position: absolute; top: 16px; left: 16px; z-index: 10;
+    background: rgba(20, 26, 44, 0.82);
+    backdrop-filter: blur(8px);
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 12px;
+    padding: 16px 18px;
+    color: #e8ecf5;
+    width: 300px;
+    max-width: calc(100vw - 32px);
+    max-height: calc(100vh - 32px);
+    overflow-y: auto;
+    user-select: none;
+  }
+  .panel h1 {
+    font-size: 15px; margin: 0 0 6px; font-weight: 600;
+    cursor: pointer; display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  }
+  .panel h1 .caret { font-size: 11px; color: #6c7a95; transition: transform .2s; }
+  .panel.collapsed h1 { margin-bottom: 0; }
+  .panel.collapsed h1 .caret { transform: rotate(-90deg); }
+  .panel.collapsed .panel-body { display: none; }
+  .panel .desc { font-size: 12.5px; color: #9fb0d0; margin-bottom: 12px; line-height: 1.65; }
+
+  .axis-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+  .axis-row label { width: 52px; font-size: 12.5px; color: #9fb0d0; flex-shrink: 0; }
+  .axis-row select {
+    flex: 1;
+    background: rgba(0,0,0,0.35);
+    border: 1px solid rgba(255,255,255,0.18);
+    border-radius: 8px;
+    color: #e8ecf5;
+    font-size: 13px;
+    padding: 6px 8px;
+    outline: none;
+  }
+  .axis-row select:focus { border-color: #2d5bff; }
+  .axis-row .dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+
+  .btns { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+  .btns button {
+    all: unset; cursor: pointer;
+    padding: 7px 12px; border-radius: 8px;
+    border: 1px solid rgba(255,255,255,0.15);
+    background: rgba(255,255,255,0.05);
+    color: #cfd8ea; font-size: 12.5px;
+    transition: all .15s ease;
+  }
+  .btns button:hover { background: rgba(255,255,255,0.12); }
+  .btns button.active { background: #2d5bff; border-color: #2d5bff; color: #fff; }
+
+  /* ---------- 通用条目列表（视角 / 函数共用样式） ---------- */
+  .item-list { margin-top: 14px; display: flex; flex-direction: column; gap: 8px; }
+  .item-list .hint { font-size: 12px; color: #6c7a95; }
+  .item-chip {
+    display: flex; align-items: center; gap: 8px;
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 10px;
+    padding: 8px 10px;
+    cursor: pointer;
+    transition: all .15s ease;
+  }
+  .item-chip:hover { background: rgba(255,255,255,0.08); }
+  .item-chip.active { border-color: #2d5bff; background: rgba(45,91,255,0.15); }
+  .item-chip.hidden-item { opacity: 0.45; }
+  .item-chip .swatch {
+    width: 22px; height: 22px; border-radius: 6px; flex-shrink: 0;
+    border: 1px solid rgba(255,255,255,0.25);
+    cursor: pointer; position: relative; overflow: hidden;
+  }
+  .item-chip .swatch input[type=color] {
+    position: absolute; inset: -6px; width: 40px; height: 40px;
+    opacity: 0; cursor: pointer; border: none; padding: 0;
+  }
+  .item-chip .label {
+    flex: 1; min-width: 0;
+    font: 12px Consolas, monospace;
+    color: #cfd8ea;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .item-chip .op {
+    all: unset; cursor: pointer; font-size: 11px; color: #9fb0d0;
+    padding: 3px 7px; border-radius: 5px;
+    border: 1px solid rgba(255,255,255,0.12);
+  }
+  .item-chip .op:hover { color: #fff; background: rgba(255,255,255,0.1); }
+  .item-chip .rm {
+    all: unset; cursor: pointer; font-size: 13px; color: #ff7b7b;
+    padding: 3px 7px; border-radius: 5px;
+  }
+  .item-chip .rm:hover { background: rgba(255,80,80,0.15); }
+  .item-list .add {
+    all: unset; cursor: pointer; text-align: center;
+    font-size: 12.5px; color: #9fb0d0;
+    border: 1px dashed rgba(255,255,255,0.25);
+    border-radius: 10px; padding: 8px;
+  }
+  .item-list .add:hover { color: #fff; border-color: #2d5bff; background: rgba(45,91,255,0.12); }
+  .opacity-row { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
+  .opacity-row label { font-size: 12px; color: #9fb0d0; flex-shrink: 0; }
+  .opacity-row input[type=range] { flex: 1; accent-color: #2d5bff; }
+  .num-input {
+    width: 64px; flex-shrink: 0;
+    background: rgba(0,0,0,0.35);
+    border: 1px solid rgba(255,255,255,0.18);
+    border-radius: 8px;
+    color: #ffd166;
+    font: 600 13px Consolas, monospace;
+    padding: 5px 6px;
+    outline: none;
+    text-align: right;
+  }
+  .num-input:focus { border-color: #2d5bff; }
+  .num-input::-webkit-inner-spin-button { opacity: 0.4; }
+
+  .t-box { margin-top: 12px; padding: 10px; border: 1px solid rgba(255,255,255,0.1); border-radius: 10px; background: rgba(255,255,255,0.03); }
+  .t-box .hint { font-size: 11.5px; color: #6c7a95; margin-top: 8px; line-height: 1.5; }
+  .t-box .fn-row button {
+    all: unset; cursor: pointer;
+    background: rgba(192,138,62,0.25); color: #ffd166;
+    border: 1px solid rgba(192,138,62,0.5);
+    border-radius: 8px; padding: 0 14px;
+    font-size: 13px; font-weight: 600; flex-shrink: 0;
+  }
+  .t-box .fn-row button:hover { background: rgba(192,138,62,0.45); }
+  .t-box .fn-row { display: flex; gap: 8px; align-items: stretch; }
+
+  .stereo-box { margin-top: 12px; padding: 10px; border: 1px solid rgba(255,255,255,0.1); border-radius: 10px; background: rgba(255,255,255,0.03); }
+  .stereo-box .hint { font-size: 11.5px; color: #6c7a95; margin-bottom: 8px; line-height: 1.5; }
+  .stereo-box select {
+    flex: 1;
+    background: rgba(0,0,0,0.35);
+    border: 1px solid rgba(255,255,255,0.18);
+    border-radius: 8px;
+    color: #e8ecf5;
+    font-size: 12px;
+    padding: 5px 6px;
+    outline: none;
+  }
+  #btn-stereo-info {
+    border-style: dashed;
+    color: #9fb0d0;
+    padding: 7px 10px;
+  }
+
+  #info-modal {
+    position: absolute; inset: 0; z-index: 50;
+    background: rgba(5,8,16,0.6);
+    display: none; align-items: center; justify-content: center;
+  }
+  #info-modal.show { display: flex; }
+  #info-modal .card {
+    background: rgba(20, 26, 44, 0.96);
+    border: 1px solid rgba(255,255,255,0.15);
+    border-radius: 14px;
+    padding: 22px 26px;
+    max-width: 520px; width: calc(100vw - 48px);
+    color: #e8ecf5; font-size: 13.5px; line-height: 1.8;
+    user-select: text;
+  }
+  #info-modal h2 { font-size: 16px; margin: 0 0 10px; }
+  #info-modal .close {
+    all: unset; cursor: pointer; float: right; color: #9fb0d0;
+    font-size: 18px; padding: 0 6px;
+  }
+  #info-modal .close:hover { color: #fff; }
+  #info-modal b { color: #ffd166; }
+  #info-modal .formula { font-family: Consolas, monospace; color: #7ee0c0; background: rgba(0,0,0,0.3); padding: 2px 6px; border-radius: 5px; }
+
+  .rot4-box { margin-top: 12px; padding: 10px; border: 1px solid rgba(255,255,255,0.1); border-radius: 10px; background: rgba(255,255,255,0.03); }
+  .rot4-box .hint { font-size: 11.5px; color: #6c7a95; margin-bottom: 8px; line-height: 1.5; }
+  .rot-row { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
+  .rot-row label { width: 78px; flex-shrink: 0; font: 11px Consolas, monospace; color: #9fb0d0; }
+  .rot-row input[type=range] { flex: 1; accent-color: #c08a3e; }
+  .rot-num { width: 52px; padding: 4px 4px; font-size: 11.5px; }
+  .rot-val { width: 38px; flex-shrink: 0; text-align: right; font: 11px Consolas, monospace; color: #ffd166; }
+  .rot-reset {
+    all: unset; cursor: pointer; font-size: 12px; color: #9fb0d0;
+    border: 1px solid rgba(255,255,255,0.15); border-radius: 8px;
+    padding: 5px 12px; margin-top: 4px;
+  }
+  .rot-reset:hover { color: #fff; background: rgba(255,255,255,0.1); }
+
+  .fn-panel {
+    position: absolute; top: 16px; right: 16px; z-index: 10;
+    background: rgba(20, 26, 44, 0.82);
+    backdrop-filter: blur(8px);
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 12px;
+    padding: 14px 16px;
+    color: #e8ecf5;
+    width: 300px;
+    max-width: calc(100vw - 32px);
+    max-height: calc(100vh - 32px);
+    overflow-y: auto;
+    user-select: none;
+  }
+  .fn-panel label { font-size: 13px; color: #9fb0d0; display: block; margin-bottom: 6px; cursor: pointer; }
+  .fn-panel.collapsed .fn-body { display: none; }
+  .fn-row { display: flex; gap: 8px; }
+  .fn-row input {
+    flex: 1; min-width: 0;
+    background: rgba(0,0,0,0.35);
+    border: 1px solid rgba(255,255,255,0.18);
+    border-radius: 8px;
+    color: #ffd166;
+    font: 600 15px Consolas, monospace;
+    padding: 8px 10px;
+    outline: none;
+  }
+  .fn-row input:focus { border-color: #2d5bff; }
+  .fn-row button {
+    all: unset; cursor: pointer;
+    background: #2d5bff; color: #fff;
+    border-radius: 8px; padding: 0 14px;
+    font-size: 13px; font-weight: 600;
+  }
+  .fn-row button:hover { background: #1f47d6; }
+  .fn-row button.secondary {
+    background: rgba(255,255,255,0.08); font-weight: 500;
+    border: 1px solid rgba(255,255,255,0.15);
+  }
+  .fn-row button.secondary:hover { background: rgba(45,91,255,0.35); }
+  .fn-presets { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+  .fn-presets button {
+    all: unset; cursor: pointer;
+    font: 12px Consolas, monospace;
+    color: #9fb0d0;
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 6px;
+    padding: 4px 8px;
+  }
+  .fn-presets button:hover { color: #fff; background: rgba(45,91,255,0.4); }
+  .fn-err { font-size: 12px; color: #ff7b7b; margin-top: 8px; min-height: 16px; }
+
+  .legend {
+    position: absolute; bottom: 16px; left: 16px; z-index: 10;
+    color: #8892a8; font-size: 12px;
+    background: rgba(20,26,44,.7); border-radius: 8px;
+    padding: 8px 12px; border: 1px solid rgba(255,255,255,.08);
+    line-height: 1.7;
+    max-width: calc(100vw - 32px);
+  }
+  .legend span { color: #e8ecf5; }
+  .legend b { font-weight: 600; }
+
+  #toast {
+    position: absolute; top: 16px; left: 50%; transform: translateX(-50%) translateY(-8px);
+    background: rgba(20,26,44,.92); border: 1px solid rgba(255,255,255,.15);
+    color: #e8ecf5; font-size: 13px; border-radius: 10px;
+    padding: 8px 16px; opacity: 0; pointer-events: none;
+    transition: opacity .25s, transform .25s;
+    z-index: 10;
+  }
+  #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  #toast.ok { border-color: rgba(126,224,192,.5); }
+  #toast.err { border-color: rgba(255,123,123,.6); color: #ffb3b3; }
+
+  /* ---------- 语言切换器 ---------- */
+  #lang-switch {
+    position: absolute; top: 16px; left: 50%; transform: translateX(-50%);
+    z-index: 20;
+    display: flex; gap: 0;
+    background: rgba(20, 26, 44, 0.82);
+    backdrop-filter: blur(8px);
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 10px;
+    overflow: hidden;
+    user-select: none;
+  }
+  #lang-switch button {
+    all: unset; cursor: pointer;
+    padding: 6px 14px;
+    font-size: 12.5px; color: #9fb0d0;
+    border-right: 1px solid rgba(255,255,255,0.08);
+    transition: all .15s ease;
+  }
+  #lang-switch button:last-child { border-right: none; }
+  #lang-switch button:hover { background: rgba(255,255,255,0.1); color: #fff; }
+  #lang-switch button.active { background: #2d5bff; color: #fff; }
+
+  @media (max-width: 720px) {
+    .panel { width: 260px; padding: 12px 14px; }
+    .fn-panel { width: 260px; padding: 12px 14px; }
+    .legend { font-size: 11px; }
+    #lang-switch button { padding: 5px 10px; font-size: 11.5px; }
+  }
+</style>
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+</head>
+<body>
+<div id="app">
+  <div id="lang-switch">
+    <button data-lang="zh" class="active">中文</button>
+    <button data-lang="en">EN</button>
+    <button data-lang="ja">日本語</button>
+  </div>
+  <div class="panel" id="left-panel">
+    <h1 id="left-toggle" aria-label="展开或收起投影设置" data-i18n-aria="ariaTogglePanel"><span data-i18n="h1">四维数据 → 任选三个维度投影</span> <span class="caret">▼</span></h1>
+    <div class="panel-body">
+      <div class="desc" data-i18n-html="desc">
+        复函数 f(w) 的图像天然是四维的：<br>
+        (Re w, Im w, <b style="color:#ffd166">Re f</b>, <b style="color:#7ee0c0">Im f</b>)<br>
+        从中任选 3 个维度映射到下方三维坐标轴
+      </div>
+      <div class="axis-row"><label data-i18n="presetScene">预设场景</label><div class="dot" style="background:#c08a3e;visibility:hidden"></div><select id="preset-sel" aria-label="预设场景" data-i18n-aria="presetScene"><option value="-1" data-i18n="choosePreset">选择预设场景…</option></select></div>
+      <div class="axis-row"><label data-i18n="axisH1">水平轴 1</label><div class="dot" style="background:#ff6b6b"></div><select id="sel-h1" aria-label="水平轴 1" data-i18n-aria="axisH1"></select></div>
+      <div class="axis-row"><label data-i18n="axisH2">水平轴 2</label><div class="dot" style="background:#6ba8ff"></div><select id="sel-h2" aria-label="水平轴 2" data-i18n-aria="axisH2"></select></div>
+      <div class="axis-row"><label data-i18n="axisV">竖直轴</label><div class="dot" style="background:#7ee0c0"></div><select id="sel-v" aria-label="竖直轴" data-i18n-aria="axisV"></select></div>
+      <div class="opacity-row">
+        <label for="opacity" data-i18n="opacity">不透明度</label>
+        <input type="range" id="opacity" min="0.25" max="1" step="0.05" value="0.85">
+      </div>
+      <div class="btns">
+        <button data-preset="rew,imw,ref" data-i18n="presetRefView">经典：Re f 视角</button>
+        <button data-preset="rew,imw,imf" data-i18n="presetImfView">经典：Im f 视角</button>
+        <button data-preset="rew,ref,imf" data-i18n="presetOutRe">输出平面：Re f × Im f</button>
+        <button data-preset="imw,ref,imf" data-i18n="presetOutImw">输出平面：× Im w</button>
+        <button id="btn-wire" aria-pressed="false" data-i18n="wireframe">线框 开/关</button>
+        <button id="btn-grid" class="active" aria-pressed="true" data-i18n="grid">网格 开/关</button>
+        <button id="btn-rotate" aria-pressed="false" data-i18n="autoRotate">自动旋转</button>
+        <button id="btn-reset" data-i18n="resetView">复位视角</button>
+        <button id="btn-rot4" aria-pressed="false" data-i18n="rot4Toggle">4D 旋转 开/关</button>
+        <button id="btn-dc" aria-pressed="false" data-i18n="domainColor">域着色 开/关</button>
+        <button id="btn-stereo" aria-pressed="false" data-i18n="stereoToggle">双眼模式 开/关</button>
+        <button id="btn-stereo-info" title="双眼模式简介" data-i18n-title="stereoInfoTitle"><span data-i18n="stereoInfo">ⓘ 简介</span></button>
+      </div>
+      <div class="stereo-box" id="stereo-box" style="display:none">
+        <div class="hint" data-i18n-html="stereoHint">双眼模式：四维空间中一对相对距离固定的"眼睛"，各自拍出一张三维投影并排显示——正如双眼各拍一张二维照片产生立体感，两幅三维图的差异蕴含第四维的深度信息。左右两幅图可分别拖拽旋转，各自拥有独立的三维视角。</div>
+        <div class="rot-row">
+          <label data-i18n="rotTarget">旋转目标</label>
+          <select id="stereo-target" aria-label="旋转目标" data-i18n-aria="rotTarget">
+            <option value="mid" data-i18n="targetMid">中间姿态（两眼对称变化）</option>
+            <option value="L" data-i18n="targetL">左眼（仅左模型变化）</option>
+            <option value="R" data-i18n="targetR">右眼（仅右模型变化）</option>
+          </select>
+        </div>
+        <div class="rot-row">
+          <label><span data-i18n="stereoBase">双眼基线</span> <span id="stereo-base-val">15°</span></label>
+          <input type="range" id="stereo-base" min="1" max="60" step="1" value="15">
+        </div>
+      </div>
+      <div class="rot4-box" id="rot4-box" style="display:none">
+        <div class="hint" data-i18n-html="rot4Hint">4D 旋转：在四维空间中绕坐标平面旋转后再投影（角度相对当前视角的三根轴 + 第四维 w）</div>
+        <div class="rot-row"><label id="rot-l0">—</label><input type="number" id="rot-n0" class="num-input rot-num" min="-180" max="180" step="0.1" value="0" aria-label="旋转角度0"><input type="range" id="rot-a0" min="-180" max="180" step="5" value="0"><span class="rot-val" id="rot-v0">0°</span></div>
+        <div class="rot-row"><label id="rot-l1">—</label><input type="number" id="rot-n1" class="num-input rot-num" min="-180" max="180" step="0.1" value="0" aria-label="旋转角度1"><input type="range" id="rot-a1" min="-180" max="180" step="5" value="0"><span class="rot-val" id="rot-v1">0°</span></div>
+        <div class="rot-row"><label id="rot-l2">—</label><input type="number" id="rot-n2" class="num-input rot-num" min="-180" max="180" step="0.1" value="0" aria-label="旋转角度2"><input type="range" id="rot-a2" min="-180" max="180" step="5" value="0"><span class="rot-val" id="rot-v2">0°</span></div>
+        <div class="rot-row"><label id="rot-l3">—</label><input type="number" id="rot-n3" class="num-input rot-num" min="-180" max="180" step="0.1" value="0" aria-label="旋转角度3"><input type="range" id="rot-a3" min="-180" max="180" step="5" value="0"><span class="rot-val" id="rot-v3">0°</span></div>
+        <div class="rot-row"><label id="rot-l4">—</label><input type="number" id="rot-n4" class="num-input rot-num" min="-180" max="180" step="0.1" value="0" aria-label="旋转角度4"><input type="range" id="rot-a4" min="-180" max="180" step="5" value="0"><span class="rot-val" id="rot-v4">0°</span></div>
+        <div class="rot-row"><label id="rot-l5">—</label><input type="number" id="rot-n5" class="num-input rot-num" min="-180" max="180" step="0.1" value="0" aria-label="旋转角度5"><input type="range" id="rot-a5" min="-180" max="180" step="5" value="0"><span class="rot-val" id="rot-v5">0°</span></div>
+        <button id="btn-rot4-reset" class="rot-reset" data-i18n="resetAngles">复位角度</button>
+      </div>
+      <div class="item-list" id="views">
+        <div class="hint" data-i18n="viewsHint">视角列表（点击选中，用上方下拉框编辑；曲面颜色跟随函数）</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="fn-panel" id="right-panel">
+    <label id="right-toggle"><span data-i18n="fnListTitle">复函数列表（可同时叠加多个）</span><span style="float:right;color:#6c7a95;font-size:11px"><span data-i18n="clickCollapse">点击折叠</span> ▾</span></label>
+    <div class="fn-body">
+      <div class="fn-row">
+        <input id="fn-input" type="text" value="x^2" spellcheck="false" aria-label="复函数表达式" data-i18n-aria="fnInputAria">
+        <button id="fn-apply" title="更新当前选中的函数；未选中则新增" data-i18n-title="applyTitle" data-i18n="apply">更新</button>
+        <button id="fn-new" class="secondary" title="把输入框内容作为新函数添加" data-i18n-title="newTitle" data-i18n="addNew">＋新</button>
+      </div>
+      <div class="fn-presets">
+        <button>x^2</button><button>x^3</button><button>x^2+1</button>
+        <button>sin(x)</button><button>exp(x)</button><button>log(x)</button>
+        <button>1/x</button><button>sqrt(x)</button><button>(x-i)/(x+i)</button>
+      </div>
+      <div class="fn-err" id="fn-err" role="alert"></div>
+      <div class="item-list" id="fn-list">
+        <div class="hint" data-i18n-html="fnListHint">函数列表：点击选中后可用「更新」修改；「＋新」叠加新函数。每个函数 × 每个视角 = 一张曲面</div>
+      </div>
+      <div class="t-box">
+        <div class="fn-row">
+          <button id="t-play" title="播放/暂停参数扫描" data-i18n-title="tPlayTitle"><span data-i18n="play">▶ 播放</span></button>
+          <input type="number" id="t-num" class="num-input" step="0.1" value="1" aria-label="参数 t 数值" data-i18n-aria="paramTAria">
+        </div>
+        <div class="opacity-row" style="margin-top:8px">
+          <label for="t-slider" style="flex-shrink:0"><span data-i18n="paramT">参数 t =</span> <span id="t-show">1</span></label>
+          <input type="range" id="t-slider" min="-5" max="5" step="0.1" value="1">
+        </div>
+        <div class="hint" data-i18n-html="tHint">表达式中可用 t 作为可调参数（如 x^t、sin(t*x)），播放时自动扫描 -5 ~ 5</div>
+      </div>
+      <div class="opacity-row" style="margin-top:6px">
+        <label for="domain-num" style="flex-shrink:0"><span data-i18n="domainRange">绘制范围 ±</span></label>
+        <input type="number" id="domain-num" class="num-input" min="0.1" max="100" step="0.1" value="3" aria-label="绘制范围数值" data-i18n-aria="domainAria">
+        <input type="range" id="domain" min="1" max="10" step="0.5" value="3">
+      </div>
+      <div class="opacity-row">
+        <label><input type="checkbox" id="out-auto" checked style="accent-color:#2d5bff"> <span data-i18n="outAuto">输出量程自动</span></label>
+        <label style="margin-left:10px"><input type="checkbox" id="per-fn" style="accent-color:#2d5bff"> <span data-i18n="perFn">各函数独立量程</span></label>
+      </div>
+      <div class="opacity-row" id="out-manual-row" style="display:none">
+        <label for="out-num" style="flex-shrink:0"><span data-i18n="outRange">输出 ±</span></label>
+        <input type="number" id="out-num" class="num-input" min="0.1" max="10000" step="0.5" value="10" aria-label="输出量程数值" data-i18n-aria="outRangeAria">
+        <input type="range" id="out-range" min="0.5" max="100" step="0.5" value="10">
+      </div>
+    </div>
+  </div>
+
+  <div class="legend" id="legend"></div>
+  <div id="toast" role="status"></div>
+  <div id="info-modal">
+    <div class="card">
+      <button class="close" id="info-close">✕</button>
+      <h2 data-i18n="stereoIntroTitle">双眼模式简介</h2>
+      <div data-i18n-html="stereoIntroBody">先想一个日常经验：闭上一只眼睛，世界变成一张"照片"，远近难分；睁开双眼，大脑把两张略有不同的照片一对比，远近就出来了。也就是说，<b>两个不同视角的差，就是深度的线索</b>。<br><br>
+      现在把这套办法搬到四维：我们本来只能看到四维物体的"三维照片"（就像单眼拍照），看不到第四个方向上的远近。于是我们派出<b>两只四维眼睛</b>，从两个稍有不同的角度各拍一张"三维照片"，并排放在屏幕左右。<br><br>
+      怎么读这两幅图？<b>两幅图长得越不一样的地方，那个点在第四维上离你越近或越远</b>；两幅图完全一样的部分，说明它就落在"正前方"的三维面上。<br><br>
+      <b>旋转目标</b>就像转头方式："中间姿态"= 脑袋整体转向，两眼一起动，视差不变；"左眼 / 右眼" = 只转一只眼睛，另一幅图纹丝不动，你可以清楚看到视差是怎么产生深度的。<b>双眼基线</b>= 两眼的间距，拉大它视差更夸张，就像两眼离得越远立体感越强。<br><br>
+      上手建议：先开"左眼"目标、把某个角度从 0° 慢慢拖到 90°，盯着右边不动的那幅图对比左边的变化——这就是四维的"近"与"远"。<br><br>
+      左右两幅图还支持<b>分别拖拽旋转</b>：每只四维眼睛都拥有自己独立的三维视角（就像两只眼可以各自转头），可以一个从正面看、一个从侧面看同一个四维对象。</div>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+const app = document.getElementById('app');
+
+// ================= 国际化 (i18n) =================
+const I18N = {
+  zh: {
+    title: '复函数四维数据的任意三维投影',
+    metaDesc: '在浏览器中交互式可视化复函数：从 Re w、Im w、Re f、Im f、|f| 中任选三个维度投影到三维空间，支持任意复表达式输入、多函数与多视角叠加。',
+    h1: '四维数据 → 任选三个维度投影',
+    desc: '复函数 f(w) 的图像天然是四维的：<br>(Re w, Im w, <b style="color:#ffd166">Re f</b>, <b style="color:#7ee0c0">Im f</b>)<br>从中任选 3 个维度映射到下方三维坐标轴',
+    presetScene: '预设场景', choosePreset: '选择预设场景…',
+    axisH1: '水平轴 1', axisH2: '水平轴 2', axisV: '竖直轴', opacity: '不透明度',
+    presetRefView: '经典：Re f 视角', presetImfView: '经典：Im f 视角',
+    presetOutRe: '输出平面：Re f × Im f', presetOutImw: '输出平面：× Im w',
+    wireframe: '线框 开/关', grid: '网格 开/关', autoRotate: '自动旋转',
+    resetView: '复位视角', rot4Toggle: '4D 旋转 开/关', domainColor: '域着色 开/关',
+    stereoToggle: '双眼模式 开/关', stereoInfo: 'ⓘ 简介', stereoInfoTitle: '双眼模式简介',
+    stereoHint: '双眼模式：四维空间中一对相对距离固定的"眼睛"，各自拍出一张三维投影并排显示——正如双眼各拍一张二维照片产生立体感，两幅三维图的差异蕴含第四维的深度信息。左右两幅图可分别拖拽旋转，各自拥有独立的三维视角。',
+    rotTarget: '旋转目标', targetMid: '中间姿态（两眼对称变化）',
+    targetL: '左眼（仅左模型变化）', targetR: '右眼（仅右模型变化）',
+    stereoBase: '双眼基线',
+    rot4Hint: '4D 旋转：在四维空间中绕坐标平面旋转后再投影（角度相对当前视角的三根轴 + 第四维 w）',
+    resetAngles: '复位角度',
+    viewsHint: '视角列表（点击选中，用上方下拉框编辑；曲面颜色跟随函数）',
+    fnListTitle: '复函数列表（可同时叠加多个）', clickCollapse: '点击折叠',
+    apply: '更新', applyTitle: '更新当前选中的函数；未选中则新增',
+    addNew: '＋新', newTitle: '把输入框内容作为新函数添加',
+    fnListHint: '函数列表：点击选中后可用「更新」修改；「＋新」叠加新函数。每个函数 × 每个视角 = 一张曲面',
+    play: '▶ 播放', tPlayTitle: '播放/暂停参数扫描', paramT: '参数 t =',
+    tHint: '表达式中可用 t 作为可调参数（如 x^t、sin(t*x)），播放时自动扫描 -5 ~ 5',
+    domainRange: '绘制范围 ±', outAuto: '输出量程自动', perFn: '各函数独立量程', outRange: '输出 ±',
+    stereoIntroTitle: '双眼模式简介',
+    stereoIntroBody: '先想一个日常经验：闭上一只眼睛，世界变成一张"照片"，远近难分；睁开双眼，大脑把两张略有不同的照片一对比，远近就出来了。也就是说，<b>两个不同视角的差，就是深度的线索</b>。<br><br>现在把这套办法搬到四维：我们本来只能看到四维物体的"三维照片"（就像单眼拍照），看不到第四个方向上的远近。于是我们派出<b>两只四维眼睛</b>，从两个稍有不同的角度各拍一张"三维照片"，并排放在屏幕左右。<br><br>怎么读这两幅图？<b>两幅图长得越不一样的地方，那个点在第四维上离你越近或越远</b>；两幅图完全一样的部分，说明它就落在"正前方"的三维面上。<br><br><b>旋转目标</b>就像转头方式："中间姿态"= 脑袋整体转向，两眼一起动，视差不变；"左眼 / 右眼" = 只转一只眼睛，另一幅图纹丝不动，你可以清楚看到视差是怎么产生深度的。<b>双眼基线</b>= 两眼的间距，拉大它视差更夸张，就像两眼离得越远立体感越强。<br><br>上手建议：先开"左眼"目标、把某个角度从 0° 慢慢拖到 90°，盯着右边不动的那幅图对比左边的变化——这就是四维的"近"与"远"。<br><br>左右两幅图还支持<b>分别拖拽旋转</b>：每只四维眼睛都拥有自己独立的三维视角（就像两只眼可以各自转头），可以一个从正面看、一个从侧面看同一个四维对象。',
+    eyeL: '左眼 L', eyeR: '右眼 R',
+    // DIMS
+    dim_rew: 'Re w —— 输入实部', dim_imw: 'Im w —— 输入虚部',
+    dim_ref: 'Re f —— 输出实部', dim_imf: 'Im f —— 输出虚部', dim_mod: '|f| —— 输出模长',
+    // Toast / dynamic
+    rot4OnToast: '4D 旋转已开启：坐标轴刻度隐藏，拖动下方六个角度滑杆观察四维翻转',
+    stereoOnToast: '双眼模式：左右两幅三维投影 = 四维中一对"眼睛"的视角，差异即第四维深度信息',
+    dcOnToast: '域着色：色相=辐角 arg f，亮度=模长 |f|（对数刻度）',
+    targetMidToast: '旋转目标：中间姿态（两眼对称变化）',
+    targetLToast: '旋转目标：左眼（仅左侧模型变化）',
+    targetRToast: '旋转目标：右眼（仅右侧模型变化）',
+    angleError: '角度需在 -180° ~ 180° 之间',
+    paramError: '参数 t 需为数值',
+    domainError: '绘制范围需为正数',
+    outRangeError: '输出量程需为正数',
+    maxFnError: '最多同时叠加 {n} 个函数',
+    updatedToast: '已更新 {expr} · {n} 个有效点',
+    addedToast: '已叠加 {expr}（共 {n} 个函数）',
+    exprError: '表达式有误：',
+    divZero: '除以零',
+    noValid: '定义域内几乎没有有效值',
+    loadedToast: '已加载：',
+    hide: '隐藏', show: '显示',
+    keepOneView: '至少保留一个视角', keepOneFn: '至少保留一个函数',
+    addView: '+ 叠加新视角（当前轴选择的副本）',
+    addFnList: '+ 叠加新函数（输入表达式后点此添加，最多 {n} 个）',
+    pause: '⏸ 暂停', play2: '▶ 播放',
+    // Legend
+    legendFns: '函数（{n}）：', legendViews: '视角（{n}）：',
+    legendPerFn: '各函数独立量程：曲面高度按各自量程缩放，仅轴刻度对应选中函数',
+    legendRot4: '4D 旋转中：[{a}, {b}, {c}, {d}] 六平面角度 [{e}]',
+    legendStereo: '双眼模式：基线 {a}°，旋转目标={b}｜左图=左眼投影，右图=右眼投影（左右可分别拖拽旋转）',
+    legendAxis: '轴颜色：红=水平1 · 绿=竖直 · 蓝=水平2（属于当前选中视角）｜拖拽旋转 · 滚轮缩放 · 双击复位',
+    legendStereoMid: '中间姿态', legendStereoL: '左眼', legendStereoR: '右眼',
+    scaleWarn: '「{expr}」被压扁到不足满高 8%（注意：复变 sin/exp 等沿虚轴按 cosh 增长，大范围时量级惊人）——可勾选「各函数独立量程」查看形状',
+    // Scenes
+    scene_0: 'x² 抛物面（默认）', scene_1: 'x³ 三视图',
+    scene_2: 'exp(x) 实虚对照', scene_3: '1/x 极点（域着色）',
+    scene_4: 'x² 对比 x³', scene_5: 'sin(x) 大范围（域着色）',
+    scene_6: '(x-i)/(x+i) 与极点', scene_7: '4D 旋转演示：x²',
+    scene_8: '参数扫描：x^t', scene_9: 'sin(t·x) 振荡扫描',
+    // Parser errors
+    err_invalidNum: '非法数字：{v}', err_unrecognized: '无法识别的字符：{v}',
+    err_incomplete: '表达式不完整', err_missingParen: '缺少右括号',
+    err_missingParenFn: '{v}(...) 缺少右括号', err_missingArg: '{v} 后缺少参数',
+    err_unknown: '未知符号：{v}', err_unexpected: '意外的符号',
+    err_trailing: '表达式末尾有多余内容', err_overflow: '值溢出',
+    viewChipTitle: '点击选中此视角，再用上方下拉框编辑',
+    fnChipTitle: '点击选中编辑（{n} 个有效采样点）',
+    fnColor: '函数颜色',
+    ariaTogglePanel: '展开或收起投影设置',
+    fnInputAria: '复函数表达式',
+    paramTAria: '参数 t 数值',
+    domainAria: '绘制范围数值',
+    outRangeAria: '输出量程数值',
+    rotAngleAria: '旋转角度{n}',
+  },
+  en: {
+    title: 'Arbitrary 3D Projection of Complex Function 4D Data',
+    metaDesc: 'Interactive visualization of complex functions in the browser: choose any 3 of Re w, Im w, Re f, Im f, |f| to project into 3D space. Supports arbitrary complex expressions, multiple functions and viewpoints.',
+    h1: '4D Data → Pick 3 Dimensions to Project',
+    desc: 'A complex function f(w) is inherently 4-dimensional:<br>(Re w, Im w, <b style="color:#ffd166">Re f</b>, <b style="color:#7ee0c0">Im f</b>)<br>Pick 3 of these dimensions to map onto the 3D axes below',
+    presetScene: 'Preset Scenes', choosePreset: 'Choose a preset…',
+    axisH1: 'Horizontal 1', axisH2: 'Horizontal 2', axisV: 'Vertical', opacity: 'Opacity',
+    presetRefView: 'Classic: Re f View', presetImfView: 'Classic: Im f View',
+    presetOutRe: 'Output Plane: Re f × Im f', presetOutImw: 'Output Plane: × Im w',
+    wireframe: 'Wireframe On/Off', grid: 'Grid On/Off', autoRotate: 'Auto Rotate',
+    resetView: 'Reset View', rot4Toggle: '4D Rotation On/Off', domainColor: 'Domain Coloring On/Off',
+    stereoToggle: 'Stereo Mode On/Off', stereoInfo: 'ⓘ Info', stereoInfoTitle: 'About Stereo Mode',
+    stereoHint: 'Stereo mode: a pair of "eyes" at a fixed distance in 4D space, each capturing a 3D projection shown side by side — just as two eyes each capture a 2D photo to produce depth perception, the difference between two 3D images encodes depth in the fourth dimension. Left and right images can be rotated independently, each with its own 3D viewpoint.',
+    rotTarget: 'Rotation Target', targetMid: 'Center pose (symmetric change)',
+    targetL: 'Left eye (left model only)', targetR: 'Right eye (right model only)',
+    stereoBase: 'Stereo Baseline',
+    rot4Hint: '4D Rotation: rotate in 4D space around coordinate planes before projecting (angles relative to the 3 current axes + the 4th dimension w)',
+    resetAngles: 'Reset Angles',
+    viewsHint: 'Viewpoint list (click to select, edit with dropdowns above; surface color follows function)',
+    fnListTitle: 'Complex Function List (multiple can be overlaid)', clickCollapse: 'Click to collapse',
+    apply: 'Update', applyTitle: 'Update the selected function; adds new if none selected',
+    addNew: '＋ New', newTitle: 'Add the input as a new function',
+    fnListHint: 'Function list: click to select, then use "Update" to modify; "＋ New" to overlay. Each function × each viewpoint = one surface',
+    play: '▶ Play', tPlayTitle: 'Play/Pause parameter sweep', paramT: 'Parameter t =',
+    tHint: 'Use t as an adjustable parameter in expressions (e.g. x^t, sin(t*x)); playback sweeps -5 ~ 5',
+    domainRange: 'Domain ±', outAuto: 'Auto Output Range', perFn: 'Per-function Range', outRange: 'Output ±',
+    stereoIntroTitle: 'About Stereo Mode',
+    stereoIntroBody: 'Consider a daily experience: close one eye and the world becomes a flat "photo" — hard to judge distance. Open both eyes and your brain compares two slightly different photos to perceive depth. In other words, <b>the difference between two viewpoints is the cue for depth</b>.<br><br>Now apply this to four dimensions: we can normally only see a "3D photo" of a 4D object (like single-eye photography), unable to perceive distance along the fourth direction. So we deploy <b>two 4D eyes</b>, each capturing a "3D photo" from a slightly different angle, displayed side by side.<br><br>How to read these two images? <b>Where the two images differ more, that point is closer or farther in the fourth dimension</b>; where they look identical, the point lies on the "straight-ahead" 3D hyperplane.<br><br><b>Rotation Target</b> is like how you turn your head: "Center pose" = head turns as a whole, both eyes move together, parallax unchanged; "Left eye / Right eye" = only one eye turns, the other image stays still, letting you see exactly how parallax creates depth. <b>Stereo Baseline</b> = distance between the two eyes; increasing it exaggerates parallax, just like wider-set eyes give stronger stereopsis.<br><br>Getting started: select "Left eye" target, slowly drag an angle from 0° to 90°, and watch the right image (which stays still) to see the left change — that is the 4D "near" and "far".<br><br>Left and right images also support <b>independent rotation</b>: each 4D eye has its own 3D viewpoint (like two eyes that can turn independently), so you can view the same 4D object from the front with one and from the side with the other.',
+    eyeL: 'Left L', eyeR: 'Right R',
+    dim_rew: 'Re w — Input real part', dim_imw: 'Im w — Input imaginary part',
+    dim_ref: 'Re f — Output real part', dim_imf: 'Im f — Output imaginary part', dim_mod: '|f| — Output magnitude',
+    rot4OnToast: '4D rotation enabled: axis labels hidden. Drag the six angle sliders below to observe 4D flipping',
+    stereoOnToast: 'Stereo mode: left and right 3D projections = viewpoints of a pair of "eyes" in 4D; their difference encodes 4th-dimension depth',
+    dcOnToast: 'Domain coloring: hue = arg f, brightness = |f| (log scale)',
+    targetMidToast: 'Rotation target: Center pose (symmetric change)',
+    targetLToast: 'Rotation target: Left eye (left model only)',
+    targetRToast: 'Rotation target: Right eye (right model only)',
+    angleError: 'Angle must be between -180° and 180°',
+    paramError: 'Parameter t must be a number',
+    domainError: 'Domain range must be positive',
+    outRangeError: 'Output range must be positive',
+    maxFnError: 'Maximum {n} functions can be overlaid',
+    updatedToast: 'Updated {expr} · {n} valid points',
+    addedToast: 'Added {expr} ({n} functions total)',
+    exprError: 'Expression error: ',
+    divZero: 'Division by zero',
+    noValid: 'Almost no valid values in the domain',
+    loadedToast: 'Loaded: ',
+    hide: 'Hide', show: 'Show',
+    keepOneView: 'Keep at least one viewpoint', keepOneFn: 'Keep at least one function',
+    addView: '+ Add new viewpoint (copy of current axis selection)',
+    addFnList: '+ Add new function (enter expression then click, max {n})',
+    pause: '⏸ Pause', play2: '▶ Play',
+    legendFns: 'Functions ({n}): ', legendViews: 'Views ({n}): ',
+    legendPerFn: 'Per-function range: surface height scaled by each function\'s range; axis labels correspond to the selected function only',
+    legendRot4: '4D rotation: [{a}, {b}, {c}, {d}] six-plane angles [{e}]',
+    legendStereo: 'Stereo mode: baseline {a}°, target={b} | Left=left-eye projection, Right=right-eye projection (each rotatable independently)',
+    legendAxis: 'Axis colors: Red=Horiz 1 · Green=Vertical · Blue=Horiz 2 (for the selected viewpoint) | Drag to rotate · Scroll to zoom · Double-click to reset',
+    legendStereoMid: 'Center pose', legendStereoL: 'Left eye', legendStereoR: 'Right eye',
+    scaleWarn: '"{expr}" is compressed to under 8% of full height (note: complex sin/exp grow as cosh along the imaginary axis — huge at large ranges). Try "Per-function Range" to see the shape',
+    scene_0: 'x² Paraboloid (default)', scene_1: 'x³ Three Views',
+    scene_2: 'exp(x) Real vs Imaginary', scene_3: '1/x Pole (domain coloring)',
+    scene_4: 'x² vs x³', scene_5: 'sin(x) Large Range (domain coloring)',
+    scene_6: '(x-i)/(x+i) and Poles', scene_7: '4D Rotation Demo: x²',
+    scene_8: 'Parameter Sweep: x^t', scene_9: 'sin(t·x) Oscillation Sweep',
+    // Parser errors
+    err_invalidNum: 'Invalid number: {v}', err_unrecognized: 'Unrecognized character: {v}',
+    err_incomplete: 'Expression incomplete', err_missingParen: 'Missing closing parenthesis',
+    err_missingParenFn: '{v}(...) missing closing parenthesis', err_missingArg: 'Missing argument after {v}',
+    err_unknown: 'Unknown symbol: {v}', err_unexpected: 'Unexpected token',
+    err_trailing: 'Extra content at end of expression', err_overflow: 'Value overflow',
+    viewChipTitle: 'Click to select this viewpoint, then edit with dropdowns above',
+    fnChipTitle: 'Click to select for editing ({n} valid sample points)',
+    fnColor: 'Function color',
+    ariaTogglePanel: 'Expand or collapse projection settings',
+    fnInputAria: 'Complex function expression',
+    paramTAria: 'Parameter t value',
+    domainAria: 'Plot range value',
+    outRangeAria: 'Output range value',
+    rotAngleAria: 'Rotation angle {n}',
+  },
+  ja: {
+    title: '複素関数4次元データの任意3次元投影',
+    metaDesc: 'ブラウザで複素関数をインタラクティブに可視化：Re w、Im w、Re f、Im f、|f| から3つを選んで3次元空間に投影。任意の複素数式入力、複数関数・複数視点の重ね合わせに対応。',
+    h1: '4次元データ → 3次元を選んで投影',
+    desc: '複素関数 f(w) は本質的に4次元です：<br>(Re w, Im w, <b style="color:#ffd166">Re f</b>, <b style="color:#7ee0c0">Im f</b>)<br>この中から3次元を選んで下の3軸に対応付けます',
+    presetScene: 'プリセットシーン', choosePreset: 'プリセットを選択…',
+    axisH1: '水平軸 1', axisH2: '水平軸 2', axisV: '垂直軸', opacity: '不透明度',
+    presetRefView: '定番：Re f 視点', presetImfView: '定番：Im f 視点',
+    presetOutRe: '出力平面：Re f × Im f', presetOutImw: '出力平面：× Im w',
+    wireframe: 'ワイヤーフレーム', grid: 'グリッド', autoRotate: '自動回転',
+    resetView: '視点リセット', rot4Toggle: '4D 回転', domainColor: '領域彩色',
+    stereoToggle: '双眼モード', stereoInfo: 'ⓘ 説明', stereoInfoTitle: '双眼モードについて',
+    stereoHint: '双眼モード：4次元空間中の固定距離を持つ一対の「目」が、それぞれ3次元投影を撮影して並べて表示します——両目がそれぞれ2次元写真を撮って立体感を生むように、2枚の3次元図の違いが第4次元の奥行き情報を含みます。左右の図はそれぞれ独立にドラッグ回転でき、独自の3次元視点を持ちます。',
+    rotTarget: '回転ターゲット', targetMid: '中央姿勢（両目対称変化）',
+    targetL: '左目（左モデルのみ変化）', targetR: '右目（右モデルのみ変化）',
+    stereoBase: '双眼基線',
+    rot4Hint: '4D 回転：4次元空間で座標平面の周りに回転してから投影します（角度は現在の視点の3軸 + 第4次元 w に対するもの）',
+    resetAngles: '角度リセット',
+    viewsHint: '視点リスト（クリックで選択、上のドロップダウンで編集；曲面の色は関数に対応）',
+    fnListTitle: '複素関数リスト（複数同時に重ね合わせ可）', clickCollapse: 'クリックで折りたたみ',
+    apply: '更新', applyTitle: '選択中の関数を更新；未選択なら新規追加',
+    addNew: '＋新規', newTitle: '入力内容を新規関数として追加',
+    fnListHint: '関数リスト：クリックで選択後「更新」で変更；「＋新規」で重ね追加。各関数 × 各視点 = 1枚の曲面',
+    play: '▶ 再生', tPlayTitle: 'パラメータスキャン再生/一時停止', paramT: 'パラメータ t =',
+    tHint: '式内で t を調整可能パラメータとして使用（例：x^t、sin(t*x)）。再生時は -5 ～ 5 を自動スキャン',
+    domainRange: '描画範囲 ±', outAuto: '出力レンジ自動', perFn: '関数別レンジ', outRange: '出力 ±',
+    stereoIntroTitle: '双眼モードについて',
+    stereoIntroBody: '日常の経験から考えましょう：片目を閉じると世界が「写真」のようになり、距離感が分かりにくくなります。両目を開けると、脳がわずかに異なる2枚の写真を比較して距離感を生み出します。つまり、<b>2つの異なる視点の差が、奥行きの手がかり</b>です。<br><br>これを4次元に応用します：本来、4次元物体の「3次元写真」しか見られません（片目撮影のように）。そこで<b>2つの4次元の目</b>を派遣し、わずかに異なる角度からそれぞれ「3次元写真」を撮り、左右に並べて表示します。<br><br>2枚の図をどう読むか？<b>2枚の図がより異なる箇所ほど、その点は第4次元で近いか遠いか</b>を示します。完全に同じ部分は「正面」の3次元面上にあります。<br><br><b>回転ターゲット</b>は首の向け方のようなものです：「中央姿勢」= 頭全体を回し、両目が一緒に動き、視差は変わりません；「左目 / 右目」= 片目だけ回し、もう一方の図は動かず、視差がどう奥行きを生むかがよく分かります。<b>双眼基線</b>= 両目の間隔で、大きくすると視差が強調されます。<br><br>使い方のコツ：まず「左目」ターゲットを選び、ある角度を0°からゆっくり90°までドラッグし、動かない右側の図と左側の変化を見比べましょう——これが4次元の「近」と「遠」です。<br><br>左右の図は<b>それぞれ独立にドラッグ回転</b>できます：各4次元の目は独自の3次元視点を持ち（両目がそれぞれ首を回せるように）、一方を正面から、もう一方を側面から同じ4次元オブジェクトを見られます。',
+    eyeL: '左目 L', eyeR: '右目 R',
+    dim_rew: 'Re w — 入力実部', dim_imw: 'Im w — 入力虚部',
+    dim_ref: 'Re f — 出力実部', dim_imf: 'Im f — 出力虚部', dim_mod: '|f| — 出力絶対値',
+    rot4OnToast: '4D 回転を有効化：軸目盛りを非表示。下の6つの角度スライダーをドラッグして4次元の反転を観察',
+    stereoOnToast: '双眼モード：左右の3次元投影 = 4次元における一対の「目」の視点。その差が第4次元の奥行き情報',
+    dcOnToast: '領域彩色：色相 = arg f、輝度 = |f|（対数スケール）',
+    targetMidToast: '回転ターゲット：中央姿勢（両目対称変化）',
+    targetLToast: '回転ターゲット：左目（左モデルのみ変化）',
+    targetRToast: '回転ターゲット：右目（右モデルのみ変化）',
+    angleError: '角度は -180° ～ 180° の範囲で指定',
+    paramError: 'パラメータ t は数値',
+    domainError: '描画範囲は正の数',
+    outRangeError: '出力レンジは正の数',
+    maxFnError: '最大 {n} 個の関数を重ね合わせ可',
+    updatedToast: '更新完了 {expr} · 有効点 {n} 個',
+    addedToast: '追加完了 {expr}（関数計 {n} 個）',
+    exprError: '式エラー：',
+    divZero: 'ゼロ除算',
+    noValid: '定義域内に有効な値がほとんどありません',
+    loadedToast: '読み込み完了：',
+    hide: '非表示', show: '表示',
+    keepOneView: '視点は最低1つ必要', keepOneFn: '関数は最低1つ必要',
+    addView: '+ 新規視点を追加（現在の軸選択のコピー）',
+    addFnList: '+ 新規関数を追加（式を入力後クリック、最大 {n} 個）',
+    pause: '⏸ 一時停止', play2: '▶ 再生',
+    legendFns: '関数（{n}）：', legendViews: '視点（{n}）：',
+    legendPerFn: '関数別レンジ：曲面の高さは各関数のレンジでスケーリング、軸目盛りは選択関数のみ対応',
+    legendRot4: '4D 回転中：[{a}, {b}, {c}, {d}] 6平面角度 [{e}]',
+    legendStereo: '双眼モード：基線 {a}°、ターゲット={b}｜左図=左目投影、右図=右目投影（左右それぞれドラッグ回転可）',
+    legendAxis: '軸の色：赤=水平1 · 緑=垂直 · 青=水平2（選択中視点）｜ドラッグで回転 · スクロールでズーム · ダブルクリックでリセット',
+    legendStereoMid: '中央姿勢', legendStereoL: '左目', legendStereoR: '右目',
+    scaleWarn: '「{expr}」が高さ8%未満に圧縮されています（注意：複素 sin/exp は虚軸に沿って cosh で増大、広範囲では桁違いに大きくなります）——「関数別レンジ」で形状を確認',
+    scene_0: 'x² 放物面（デフォルト）', scene_1: 'x³ 三視図',
+    scene_2: 'exp(x) 実虚比較', scene_3: '1/x 極（領域彩色）',
+    scene_4: 'x² と x³ の比較', scene_5: 'sin(x) 広範囲（領域彩色）',
+    scene_6: '(x-i)/(x+i) と極', scene_7: '4D 回転デモ：x²',
+    scene_8: 'パラメータスキャン：x^t', scene_9: 'sin(t·x) 振動スキャン',
+    // Parser errors
+    err_invalidNum: '無効な数値：{v}', err_unrecognized: '認識できない文字：{v}',
+    err_incomplete: '式が不完全です', err_missingParen: '右括弧がありません',
+    err_missingParenFn: '{v}(...) に右括弧がありません', err_missingArg: '{v} の後に引数がありません',
+    err_unknown: '未知の記号：{v}', err_unexpected: '予期しないトークン',
+    err_trailing: '式の末尾に余分な内容があります', err_overflow: '値オーバーフロー',
+    viewChipTitle: 'クリックでこの視点を選択、上のドロップダウンで編集',
+    fnChipTitle: 'クリックで選択して編集（有効サンプル点 {n} 個）',
+    fnColor: '関数の色',
+    ariaTogglePanel: '投影設定を展開・折りたたみ',
+    fnInputAria: '複素関数式',
+    paramTAria: 'パラメータ t の値',
+    domainAria: '描画範囲の値',
+    outRangeAria: '出力レンジの値',
+    rotAngleAria: '回転角度{n}',
+  }
+};
+let lang = localStorage.getItem('cp-lang') || 'zh';
+function t(key, vars) {
+  let s = (I18N[lang] && I18N[lang][key]) || I18N.zh[key] || key;
+  if (vars) for (const [k, v] of Object.entries(vars)) s = s.replaceAll(`{${k}}`, v);
+  return s;
+}
+function applyLang() {
+  document.documentElement.lang = lang === 'zh' ? 'zh-CN' : lang;
+  document.title = t('title');
+  const metaDesc = document.querySelector('meta[name="description"]');
+  if (metaDesc) metaDesc.setAttribute('content', t('metaDesc'));
+  document.querySelectorAll('[data-i18n]').forEach(el => { el.textContent = t(el.dataset.i18n); });
+  document.querySelectorAll('[data-i18n-html]').forEach(el => { el.innerHTML = t(el.dataset.i18nHtml); });
+  document.querySelectorAll('[data-i18n-title]').forEach(el => { el.title = t(el.dataset.i18nTitle); });
+  document.querySelectorAll('[data-i18n-aria]').forEach(el => { el.setAttribute('aria-label', t(el.dataset.i18nAria)); });
+  document.querySelectorAll('#lang-switch button').forEach(b => b.classList.toggle('active', b.dataset.lang === lang));
+  // 重建动态生成的下拉选项（维度选择 / 预设场景）
+  if (typeof rebuildSelectOptions === 'function') { rebuildSelectOptions(); }
+  // 更新动态内容
+  if (typeof rebuildAllViews === 'function') { rebuildAllViews(); }
+  if (typeof updateRot4Labels === 'function') { updateRot4Labels(); }
+  if (typeof refreshRot4UI === 'function') { refreshRot4UI(); }
+  if (typeof renderLegend === 'function') { renderLegend(); }
+  if (typeof renderViewList === 'function') { renderViewList(); }
+  if (typeof renderFnList === 'function') { renderFnList(); }
+  if (typeof tPlayBtn !== 'undefined' && tPlayBtn) { tPlayBtn.textContent = tPlaying ? t('pause') : t('play2'); }
+  if (typeof eyeTagL !== 'undefined' && eyeTagL) { eyeTagL.textContent = t('eyeL'); }
+  if (typeof eyeTagR !== 'undefined' && eyeTagR) { eyeTagR.textContent = t('eyeR'); }
+}
+document.querySelectorAll('#lang-switch button').forEach(b => {
+  b.onclick = () => { lang = b.dataset.lang; localStorage.setItem('cp-lang', lang); applyLang(); };
+});
+
+// ================= 通用工具 =================
+function rafThrottle(fn) {
+  let queued = false, lastArgs;
+  return (...args) => {
+    lastArgs = args;
+    if (queued) return;
+    queued = true;
+    requestAnimationFrame(() => { queued = false; fn(...lastArgs); });
+  };
+}
+let toastTimer = null;
+function toast(msg, kind = '', duration = 1600) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.className = 'show ' + kind;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.className = '', duration);
+}
+
+// ================= 复数运算库 =================
+function C(re, im = 0) { return { re, im }; }
+const CAdd = (a, b) => C(a.re + b.re, a.im + b.im);
+const CSub = (a, b) => C(a.re - b.re, a.im - b.im);
+const CMul = (a, b) => C(a.re * b.re - a.im * b.im, a.re * b.im + a.im * b.re);
+const CDiv = (a, b) => {
+  const d = b.re * b.re + b.im * b.im;
+  if (d === 0) throw new Error('div0');
+  return C((a.re * b.re + a.im * b.im) / d, (a.im * b.re - a.re * b.im) / d);
+};
+const CAbs = a => Math.hypot(a.re, a.im);
+const CArg = a => Math.atan2(a.im, a.re);
+const CExp = a => { const r = Math.exp(a.re); return C(r * Math.cos(a.im), r * Math.sin(a.im)); };
+const CLog = a => C(Math.log(CAbs(a)), CArg(a));
+const CPow = (a, b) => {
+  if (b.im === 0 && Number.isInteger(b.re) && Math.abs(b.re) <= 12) {
+    let r = C(1), base = a, n = Math.abs(b.re);
+    for (let k = 0; k < n; k++) r = CMul(r, base);
+    return b.re < 0 ? CDiv(C(1), r) : r;
+  }
+  if (a.re === 0 && a.im === 0) return C(0);
+  return CExp(CMul(b, CLog(a)));
+};
+const trig = {
+  sin: a => C(Math.sin(a.re) * Math.cosh(a.im), Math.cos(a.re) * Math.sinh(a.im)),
+  cos: a => C(Math.cos(a.re) * Math.cosh(a.im), -Math.sin(a.re) * Math.sinh(a.im)),
+  sinh: a => C(Math.sinh(a.re) * Math.cos(a.im), Math.cosh(a.re) * Math.sin(a.im)),
+  cosh: a => C(Math.cosh(a.re) * Math.cos(a.im), Math.sinh(a.re) * Math.sin(a.im)),
+};
+trig.tan = a => CDiv(trig.sin(a), trig.cos(a));
+trig.tanh = a => CDiv(trig.sinh(a), trig.cosh(a));
+
+// ================= 复数表达式解析器 =================
+function compileComplex(src) {
+  const FN = {
+    sin: trig.sin, cos: trig.cos, tan: trig.tan,
+    sinh: trig.sinh, cosh: trig.cosh, tanh: trig.tanh,
+    exp: CExp, log: CLog, ln: CLog, sqrt: a => CPow(a, C(0.5)),
+    abs: a => C(CAbs(a)), arg: a => C(CArg(a)),
+    conj: a => C(a.re, -a.im), re: a => C(a.re), im: a => C(a.im),
+  };
+  const CONST = { i: C(0, 1), e: C(Math.E), pi: C(Math.PI), tau: C(2 * Math.PI) };
+  const VARS = ['x', 'w', 'z'];
+
+  const toks = [];
+  const s = String(src).replace(/\s+/g, '').replace(/−/g, '-');
+  for (let k = 0; k < s.length;) {
+    const c = s[k];
+    if (/[0-9.]/.test(c)) {
+      let j = k; while (j < s.length && /[0-9.]/.test(s[j])) j++;
+      const num = parseFloat(s.slice(k, j));
+      if (isNaN(num)) throw new Error(t('err_invalidNum', {v: s.slice(k, j)}));
+      toks.push({ t: 'num', v: num }); k = j;
+    } else if (/[a-zA-Z]/.test(c)) {
+      let j = k; while (j < s.length && /[a-zA-Z0-9_]/.test(s[j])) j++;
+      toks.push({ t: 'id', v: s.slice(k, j) }); k = j;
+    } else if ('+-*/^(),'.includes(c)) {
+      toks.push({ t: c }); k++;
+    } else throw new Error(t('err_unrecognized', {v: c}));
+  }
+  let p = 0;
+  const peek = () => toks[p];
+  const eat = t => { if (toks[p] && toks[p].t === t) return toks[p++]; return null; };
+  const startsPrimary = tk => tk && (tk.t === 'num' || tk.t === 'id' || tk.t === '(');
+  const mkBin = (op, A, B) => x => op(A(x), B(x));
+
+  function parseExpr() {
+    let l = parseTerm();
+    for (;;) {
+      if (eat('+')) l = mkBin(CAdd, l, parseTerm());
+      else if (eat('-')) l = mkBin(CSub, l, parseTerm());
+      else return l;
+    }
+  }
+  function parseTerm() {
+    let l = parseUnary();
+    for (;;) {
+      if (eat('*')) l = mkBin(CMul, l, parseUnary());
+      else if (eat('/')) l = mkBin(CDiv, l, parseUnary());
+      else if (startsPrimary(peek())) l = mkBin(CMul, l, parseUnary()); // 隐式乘法
+      else return l;
+    }
+  }
+  function parseUnary() {
+    if (eat('-')) { const a = parseUnary(); return x => CMul(C(-1), a(x)); }
+    if (eat('+')) return parseUnary();
+    return parsePow();
+  }
+  function parsePow() {
+    const base = parsePrimary();
+    if (eat('^')) { const ex = parseUnary(); return x => CPow(base(x), ex(x)); }
+    return base;
+  }
+  function parsePrimary() {
+    const tk = peek();
+    if (!tk) throw new Error(t('err_incomplete'));
+    if (tk.t === 'num') { p++; const c = C(tk.v); return () => c; }
+    if (tk.t === '(') {
+      p++; const v = parseExpr();
+      if (!eat(')')) throw new Error(t('err_missingParen'));
+      return v;
+    }
+    if (tk.t === 'id') {
+      p++;
+      const lower = tk.v.toLowerCase();
+      if (FN[lower]) {
+        let a;
+        if (eat('(')) { a = parseExpr(); if (!eat(')')) throw new Error(t('err_missingParenFn', {v: tk.v})); }
+        else if (startsPrimary(peek())) a = parseUnary(); // sin x 形式
+        else throw new Error(t('err_missingArg', {v: tk.v}));
+        const fn = FN[lower];
+        return x => fn(a(x));
+      }
+      if (VARS.includes(lower)) return x => x;
+      if (lower === 't') return () => C(T);   // 可调参数 t，运行时读全局 T
+      if (CONST[lower]) { const c = CONST[lower]; return () => c; }
+      throw new Error(t('err_unknown', {v: tk.v}));
+    }
+    throw new Error(t('err_unexpected'));
+  }
+  const ast = parseExpr();
+  if (p !== toks.length) throw new Error(t('err_trailing'));
+  return x => {
+    const r = ast(x);
+    if (!isFinite(r.re) || !isFinite(r.im)) throw new Error(t('err_overflow'));
+    return r;
+  };
+}
+
+// ================= 维度定义 =================
+const DIMS = {
+  rew: { labelKey: 'dim_rew', short: 'Re w' },
+  imw: { labelKey: 'dim_imw', short: 'Im w' },
+  ref: { labelKey: 'dim_ref', short: 'Re f' },
+  imf: { labelKey: 'dim_imf', short: 'Im f' },
+  mod: { labelKey: 'dim_mod', short: '|f|'  },
+};
+const DIM_KEYS = Object.keys(DIMS);
+
+// ================= 采样 =================
+const N = 100;
+let DOMAIN = 3;
+let field = null;
+let T = 1;            // 参数扫描变量 t
+let tPlaying = false;
+const T_SPEED = 0.8;  // 每秒推进量
+
+function sampleField(f) {
+  const n2 = (N+1)*(N+1);
+  const vals = {};
+  DIM_KEYS.forEach(k => vals[k] = new Float64Array(n2));
+  const valid = new Uint8Array(n2);
+  let outBound = 0;
+  const mods = [];
+  let validCount = 0;
+  for (let i = 0; i <= N; i++) {
+    for (let j = 0; j <= N; j++) {
+      const u = -DOMAIN + (2*DOMAIN) * i / N;
+      const v = -DOMAIN + (2*DOMAIN) * j / N;
+      const idx = i*(N+1)+j;
+      try {
+        const r = f(C(u, v));
+        if (isFinite(r.re) && isFinite(r.im) && Math.hypot(r.re, r.im) < 1e4) {
+          vals.rew[idx] = u; vals.imw[idx] = v;
+          vals.ref[idx] = r.re; vals.imf[idx] = r.im;
+          vals.mod[idx] = Math.hypot(r.re, r.im);
+          valid[idx] = 1;
+          validCount++;
+          mods.push(vals.mod[idx]);
+        }
+      } catch (e) { /* 无效点 */ }
+    }
+  }
+  if (mods.length) {
+    mods.sort((a, b) => a - b);
+    outBound = mods[Math.floor(mods.length * 0.96)] || 1;
+  }
+  return { vals, valid, outBound, validCount };
+}
+
+// ================= Three.js 场景 =================
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0b0e17);
+scene.fog = new THREE.Fog(0x0b0e17, 20, 45);
+
+const camera = new THREE.PerspectiveCamera(50, innerWidth/innerHeight, 0.1, 100);
+const HOME_POS = new THREE.Vector3(8.5, 6, 9.5);
+const HOME_TARGET = new THREE.Vector3(0, 0, 0);
+camera.position.copy(HOME_POS);
+
+// 布局：单眼 = 主画布全屏；双眼 = 左右两块屏幕并排（各自独立 canvas/renderer）
+const canvasWrap = document.createElement('div');
+canvasWrap.id = 'canvas-wrap';
+const screenL = document.createElement('div');
+screenL.id = 'screen-l';
+screenL.className = 'screen';
+const screenR = document.createElement('div');
+screenR.id = 'screen-r';
+screenR.className = 'screen';
+const eyeTagL = document.createElement('div');
+eyeTagL.className = 'eye-tag';
+eyeTagL.textContent = t('eyeL');
+const eyeTagR = document.createElement('div');
+eyeTagR.className = 'eye-tag';
+eyeTagR.textContent = t('eyeR');
+screenL.appendChild(eyeTagL);
+screenR.appendChild(eyeTagR);
+canvasWrap.append(screenL, screenR);
+app.appendChild(canvasWrap);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+renderer.setSize(innerWidth, innerHeight);
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+screenL.appendChild(renderer.domElement);
+
+const rendererR = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+rendererR.setSize(innerWidth, innerHeight);
+rendererR.setPixelRatio(Math.min(devicePixelRatio, 2));
+rendererR.domElement.style.display = 'none';   // 默认隐藏，开双眼时显示
+screenR.appendChild(rendererR.domElement);
+
+// 双眼布局切换
+function applyScreenLayout(stereo) {
+  if (stereo) {
+    canvasWrap.classList.add('stereo');
+    screenR.style.display = 'block';
+    screenR.style.pointerEvents = 'auto';
+    renderer.domElement.style.display = 'block';
+    rendererR.domElement.style.display = 'block';
+    resizeAll();
+  } else {
+    canvasWrap.classList.remove('stereo');
+    // 单眼模式下右屏容器必须隐藏，否则绝对定位全屏覆盖会拦截主画布鼠标事件
+    screenR.style.display = 'none';
+    screenR.style.pointerEvents = 'none';
+    rendererR.domElement.style.display = 'none';
+    renderer.domElement.style.display = 'block';
+    resizeAll();
+  }
+}
+function resizeAll() {
+  const wL = screenL.clientWidth || innerWidth;
+  const hL = screenL.clientHeight || innerHeight;
+  const wR = screenR.clientWidth || wL;
+  const hR = screenR.clientHeight || hL;
+  renderer.setSize(wL, hL);
+  camera.aspect = wL / hL;
+  camera.updateProjectionMatrix();
+  rendererR.setSize(wR, hR);
+  cameraR.aspect = wR / hR;
+  cameraR.updateProjectionMatrix();
+  invalidate();
+}
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.08;
+controls.minDistance = 3;
+controls.maxDistance = 40;
+// 右眼独立相机：双眼模式下拥有自己的 OrbitControls，可独立旋转（不再逐帧镜像左眼）
+const cameraR = camera.clone();
+
+scene.add(new THREE.AmbientLight(0xffffff, 0.5));
+const dir = new THREE.DirectionalLight(0xffffff, 1.0);
+dir.position.set(6, 10, 8);
+scene.add(dir);
+const dir2 = new THREE.DirectionalLight(0x88aaff, 0.35);
+dir2.position.set(-8, -4, -6);
+scene.add(dir2);
+
+const grid = new THREE.GridHelper(8, 16, 0x3a4668, 0x232c47);
+scene.add(grid);
+
+// ---------- 右眼场景（双眼模式并排渲染，几何与主场景互相独立） ----------
+const sceneR = new THREE.Scene();
+sceneR.background = new THREE.Color(0x0b0e17);
+sceneR.fog = new THREE.Fog(0x0b0e17, 20, 45);
+sceneR.add(new THREE.AmbientLight(0xffffff, 0.5));
+const dirR = new THREE.DirectionalLight(0xffffff, 1.0);
+dirR.position.set(6, 10, 8);
+sceneR.add(dirR);
+const dir2R = new THREE.DirectionalLight(0x88aaff, 0.35);
+dir2R.position.set(-8, -4, -6);
+sceneR.add(dir2R);
+const gridR = new THREE.GridHelper(8, 16, 0x3a4668, 0x232c47);
+sceneR.add(gridR);
+const viewGroupR = new THREE.Group();
+sceneR.add(viewGroupR);
+function setGridsVisible(b) { grid.visible = b; gridR.visible = b; invalidate(); }
+
+// ---- 按需渲染 ----
+let needsRender = true;
+const invalidate = () => { needsRender = true; };
+controls.addEventListener('change', invalidate);
+
+// ================= 坐标轴 =================
+const axisGroup = new THREE.Group();
+scene.add(axisGroup);
+const axisGroupR = new THREE.Group();
+sceneR.add(axisGroupR);
+function setAxesVisible(b) { axisGroup.visible = b; axisGroupR.visible = b; invalidate(); }
+function fmtNum(x) {
+  if (!isFinite(x)) return '∞';
+  if (x === 0) return '0';
+  const a = Math.abs(x);
+  if (a >= 1e5 || a < 1e-3) return x.toExponential(1).replace('e+', 'e');
+  let s = x.toFixed(2);
+  if (s.includes('.')) s = s.replace(/\.?0+$/, '');
+  return s;
+}
+function makeTextSprite(text, color, scale = 1) {
+  const cvs = document.createElement('canvas');
+  cvs.width = 256; cvs.height = 64;
+  const ctx = cvs.getContext('2d');
+  ctx.font = '600 34px Consolas, "PingFang SC", monospace';
+  ctx.fillStyle = color;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText(text, 128, 32);
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(cvs), transparent: true, depthTest: false }));
+  sprite.scale.set(2.2 * scale, 0.55 * scale, 1);
+  return sprite;
+}
+function buildAxes(colors, labels, ranges) {
+  buildAxesInto(axisGroup, colors, labels, ranges);
+  buildAxesInto(axisGroupR, colors, labels, ranges);
+  axisGroupR.visible = axisGroup.visible;
+}
+function buildAxesInto(axisGroup, colors, labels, ranges) {
+  while (axisGroup.children.length) {
+    const c = axisGroup.children.pop();
+    c.traverse(o => {
+      if (o.geometry) o.geometry.dispose();
+      if (o.material) { if (o.material.map) o.material.map.dispose(); o.material.dispose(); }
+    });
+  }
+  const R = 4.3;
+  const dirs = [
+    { v: new THREE.Vector3(1,0,0), color: colors[0], label: labels[0], range: ranges[0], off: new THREE.Vector3(0,-0.32,-0.32) },
+    { v: new THREE.Vector3(0,1,0), color: colors[1], label: labels[1], range: ranges[1], off: new THREE.Vector3(0.3,0,0.3) },
+    { v: new THREE.Vector3(0,0,1), color: colors[2], label: labels[2], range: ranges[2], off: new THREE.Vector3(-0.32,-0.32,0) },
+  ];
+  const hex = c => '#' + new THREE.Color(c).getHexString();
+  for (const d of dirs) {
+    const g = new THREE.Group();
+    const geo = new THREE.BufferGeometry().setFromPoints([ d.v.clone().multiplyScalar(-R), d.v.clone().multiplyScalar(R) ]);
+    g.add(new THREE.Line(geo, new THREE.LineBasicMaterial({ color: d.color })));
+    const cone = new THREE.Mesh(new THREE.ConeGeometry(0.09, 0.3, 12), new THREE.MeshBasicMaterial({ color: d.color }));
+    cone.position.copy(d.v.clone().multiplyScalar(R));
+    cone.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0), d.v.clone().normalize());
+    g.add(cone);
+
+    const nameSprite = makeTextSprite(d.label, hex(d.color), 1.1);
+    nameSprite.position.copy(d.v.clone().multiplyScalar(R + 0.7));
+    g.add(nameSprite);
+
+    const { lo, hi } = d.range;
+    const span = hi - lo;
+    const tickColor = 'rgba(200,210,230,0.85)';
+    for (let t = -3; t <= 3; t++) {
+      if (t === 0) continue;
+      const frac = t / DISP;
+      const val = lo + (frac + 1) / 2 * span;
+      const sprite = makeTextSprite(fmtNum(val), tickColor, 0.62);
+      sprite.position.copy(d.v.clone().multiplyScalar(t)).add(d.off.clone());
+      g.add(sprite);
+      const perp = d.off.clone().normalize().multiplyScalar(0.14);
+      const tickGeo = new THREE.BufferGeometry().setFromPoints([
+        d.v.clone().multiplyScalar(t),
+        d.v.clone().multiplyScalar(t).sub(perp)
+      ]);
+      g.add(new THREE.Line(tickGeo, new THREE.LineBasicMaterial({ color: d.color, transparent: true, opacity: 0.6 })));
+    }
+    axisGroup.add(g);
+  }
+  invalidate();
+}
+
+// ================= 数据模型 =================
+// functions: [{ expr, color, visible, field }]
+// views:     [{ h1, h2, v, visible, meshes: Map(fnIdx -> {mesh, wire}) }]
+const FN_PALETTE  = ['#4f8cff', '#ffb454', '#52c789', '#c792ea', '#ff6b81', '#7fd8e9'];
+const VIEW_MAX = 6, FN_MAX = 6;
+
+const viewGroup = new THREE.Group();
+scene.add(viewGroup);
+
+let views = [];
+let functions = [];
+let activeIdx = 0;   // 当前编辑的视角
+let activeFn = 0;    // 当前编辑的函数
+let wireMode = false;
+
+const DISP = 3.6;
+const VERT_COUNT = (N+1)*(N+1);
+
+// 共享索引网格
+const SHARED_INDICES = (() => {
+  const idx = new Uint32Array(N * N * 6);
+  let p = 0;
+  for (let i = 0; i < N; i++) for (let j = 0; j < N; j++) {
+    const a = i*(N+1)+j, b = a+1, c = a+N+1, d = c+1;
+    idx[p++]=a; idx[p++]=c; idx[p++]=b; idx[p++]=b; idx[p++]=c; idx[p++]=d;
+  }
+  return idx;
+})();
+
+let outAuto = true;
+let manualB = 10;
+let perFn = false;   // 各函数独立量程
+
+// 统一输出量程：自动模式取所有可见函数的最大 96 分位，保证多函数可比较
+function globalB() {
+  if (!outAuto) return manualB;
+  let b = 0;
+  for (const fn of functions) if (fn.visible) b = Math.max(b, fn.field?.outBound || 0);
+  return b || 1;
+}
+// 某个函数在当前量程模式下使用的 B
+function boundFor(fi) {
+  if (!outAuto) return manualB;
+  if (perFn) return functions[fi].field?.outBound || 1;
+  return globalB();
+}
+function viewRanges(v, B) {
+  return {
+    [v.h1]: axisRange(v.h1, B),
+    [v.h2]: axisRange(v.h2, B),
+    [v.v]:  axisRange(v.v, B),
+  };
+}
+function axisRange(key, B) {
+  if (key === 'rew' || key === 'imw') return { lo: -DOMAIN, hi: DOMAIN };
+  if (key === 'mod') return { lo: 0, hi: B };
+  return { lo: -B, hi: B };
+}
+
+// ---- 网格 mesh 生命周期 ----
+function createMesh() {
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(VERT_COUNT * 3), 3));
+  geo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(VERT_COUNT * 3), 3));
+  geo.setIndex(new THREE.BufferAttribute(SHARED_INDICES, 1));
+  return new THREE.Mesh(geo, new THREE.MeshStandardMaterial({
+    side: THREE.DoubleSide, roughness: 0.38, metalness: 0.12,
+    transparent: true, opacity: parseFloat(opSlider.value),
+  }));
+}
+
+// ---------- 域着色：辐角→色相，模长→亮度（对数），否则按函数纯色 ----------
+let domainColorOn = false;
+function hsl2rgb(h, s, l) {
+  const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+  const p = 2 * l - q;
+  const f = t => {
+    if (t < 0) t += 1; if (t > 1) t -= 1;
+    if (t < 1/6) return p + (q - p) * 6 * t;
+    if (t < 1/2) return q;
+    if (t < 2/3) return p + (q - p) * (2/3 - t) * 6;
+    return p;
+  };
+  return [f(h + 1/3), f(h), f(h - 1/3)];
+}
+function applyMeshColors(m, fn, fi) {
+  colorizeMesh(m.mesh, fn, fi);
+  colorizeMesh(m.meshR, fn, fi);
+}
+function colorizeMesh(mesh, fn, fi) {
+  if (domainColorOn && fn.field) {
+    const { vals } = fn.field;
+    const B = boundFor(fi) || 1;
+    const logB = Math.log1p(B) || 1;
+    const col = mesh.geometry.attributes.color.array;
+    const aRef = vals.ref, aIm = vals.imf, aMod = vals.mod;
+    let p = 0;
+    for (let i = 0; i < VERT_COUNT; i++) {
+      const hue = (Math.atan2(aIm[i], aRef[i]) / (2 * Math.PI) + 1) % 1;
+      const light = 0.30 + 0.55 * Math.min(1, Math.log1p(aMod[i]) / logB);
+      const c = hsl2rgb(hue, 0.85, light);
+      col[p++] = c[0]; col[p++] = c[1]; col[p++] = c[2];
+    }
+    mesh.geometry.attributes.color.needsUpdate = true;
+    mesh.material.vertexColors = true;
+    mesh.material.color.set(0xffffff);
+  } else {
+    mesh.material.vertexColors = false;
+    mesh.material.color.set(fn.color);
+  }
+  mesh.material.needsUpdate = true;
+}
+function ensureWire(m) {
+  if (!m.wire) {
+    m.wire = new THREE.LineSegments(new THREE.WireframeGeometry(m.mesh.geometry),
+      new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.12 }));
+    viewGroup.add(m.wire);
+  } else {
+    v_wire_refresh(m);
+  }
+}
+function ensureWireR(m) {
+  if (!m.wireR) {
+    m.wireR = new THREE.LineSegments(new THREE.WireframeGeometry(m.meshR.geometry),
+      new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.12 }));
+    viewGroupR.add(m.wireR);
+  } else {
+    m.wireR.geometry.dispose();
+    m.wireR.geometry = new THREE.WireframeGeometry(m.meshR.geometry);
+  }
+}
+function v_wire_refresh(m) {
+  m.wire.geometry.dispose();
+  m.wire.geometry = new THREE.WireframeGeometry(m.mesh.geometry);
+}
+
+// 将一个 mesh 的几何按指定 4D 角度组（sinCos 对）就地重写
+function writeMeshGeometry(mesh, vals, ranges, v, sc, fi) {
+  const pos = mesh.geometry.attributes.position.array;
+  if (rot4On) {
+    const w4 = DIM_KEYS.find(k => k !== v.h1 && k !== v.h2 && k !== v.v);
+    const rgs = { ...ranges };
+    if (!rgs[w4]) rgs[w4] = axisRange(w4, boundFor(fi));
+    const mkN = (key) => {
+      const { lo, hi } = rgs[key];
+      const span = hi - lo;
+      return x => {
+        let t = (x - lo) / span;
+        t = t < 0 ? 0 : (t > 1 ? 1 : t);
+        return t * 2 - 1;
+      };
+    };
+    const n1 = mkN(v.h1), nv = mkN(v.v), n2 = mkN(v.h2), nw = mkN(w4);
+    const a1 = vals[v.h1], av = vals[v.v], a2 = vals[v.h2], aw = vals[w4];
+    const [c12,s12,c13,s13,c14,s14,c23,s23,c24,s24,c34,s34] = sc;
+    let p = 0, x, y, z, w, t2;
+    for (let idx = 0; idx < VERT_COUNT; idx++) {
+      x = n1(a1[idx]); y = nv(av[idx]); z = n2(a2[idx]); w = nw(aw[idx]);
+      t2 =  x*c12 - y*s12; y = x*s12 + y*c12; x = t2;   // h1↔v
+      t2 =  x*c13 - z*s13; z = x*s13 + z*c13; x = t2;   // h1↔h2
+      t2 =  x*c14 - w*s14; w = x*s14 + w*c14; x = t2;   // h1↔w
+      t2 =  y*c23 - z*s23; z = y*s23 + z*c23; y = t2;   // v↔h2
+      t2 =  y*c24 - w*s24; w = y*s24 + w*c24; y = t2;   // v↔w
+      t2 =  z*c34 - w*s34; w = z*s34 + w*c34; z = t2;   // h2↔w
+      pos[p++] = x * DISP; pos[p++] = y * DISP; pos[p++] = z * DISP;
+    }
+  } else {
+    const mk = (key) => {
+      const { lo, hi } = ranges[key];
+      const span = hi - lo;
+      return x => {
+        let t = (x - lo) / span;
+        t = t < 0 ? 0 : (t > 1 ? 1 : t);
+        return (t - 0.5) * 2 * DISP;
+      };
+    };
+    const fx = mk(v.h1), fy = mk(v.v), fz = mk(v.h2);
+    const ax = vals[v.h1], ay = vals[v.v], az = vals[v.h2];
+    let p = 0;
+    for (let idx = 0; idx < VERT_COUNT; idx++) {
+      pos[p++] = fx(ax[idx]);
+      pos[p++] = fy(ay[idx]);
+      pos[p++] = fz(az[idx]);
+    }
+  }
+  mesh.geometry.attributes.position.needsUpdate = true;
+  mesh.geometry.computeVertexNormals();
+  mesh.geometry.computeBoundingSphere();
+}
+
+// 就地更新一个 (函数 × 视角) 的网格（左右眼）
+function updateFnViewMesh(v, fi) {
+  const fn = functions[fi];
+  const m = v.meshes.get(fi);
+  if (!m) return;
+  const { vals } = fn.field;
+  const ranges = viewRanges(v, boundFor(fi));
+  writeMeshGeometry(m.mesh, vals, ranges, v, stereoOn ? sinCosL : rot4SinCos, fi);
+  if (stereoOn) writeMeshGeometry(m.meshR, vals, ranges, v, sinCosR, fi);
+  applyMeshColors(m, fn, fi);
+  const vis = fn.visible && v.visible;
+  m.mesh.visible = vis;
+  m.meshR.visible = vis && stereoOn;
+  if (wireMode && vis) {
+    ensureWire(m); m.wire.visible = true;
+    if (stereoOn) { ensureWireR(m); m.wireR.visible = true; }
+  } else {
+    if (m.wire) m.wire.visible = false;
+    if (m.wireR) m.wireR.visible = false;
+  }
+}
+
+// 视角的 meshes 与 functions 对齐（增删函数后调用）
+function syncViewMeshes() {
+  for (const v of views) {
+    // 删除多余
+    for (const fi of [...v.meshes.keys()]) {
+      if (fi >= functions.length) {
+        const m = v.meshes.get(fi);
+        m.mesh.geometry.dispose(); m.mesh.material.dispose(); viewGroup.remove(m.mesh);
+        if (m.wire) { m.wire.geometry.dispose(); m.wire.material.dispose(); viewGroup.remove(m.wire); }
+        v.meshes.delete(fi);
+      }
+    }
+    // 补齐缺失
+    for (let fi = 0; fi < functions.length; fi++) {
+      if (!v.meshes.has(fi)) {
+        const mesh = createMesh();
+        viewGroup.add(mesh);
+        const meshR = createMesh();
+        meshR.visible = false;
+        viewGroupR.add(meshR);
+        v.meshes.set(fi, { mesh, meshR, wire: null, wireR: null });
+      }
+      updateFnViewMesh(v, fi);
+    }
+  }
+  invalidate();
+}
+function disposeViewMeshes(v) {
+  for (const m of v.meshes.values()) {
+    m.mesh.geometry.dispose(); m.mesh.material.dispose(); viewGroup.remove(m.mesh);
+    if (m.meshR) { m.meshR.geometry.dispose(); m.meshR.material.dispose(); viewGroupR.remove(m.meshR); }
+    if (m.wire) { m.wire.geometry.dispose(); m.wire.material.dispose(); viewGroup.remove(m.wire); }
+    if (m.wireR) { m.wireR.geometry.dispose(); m.wireR.material.dispose(); viewGroupR.remove(m.wireR); }
+  }
+  v.meshes.clear();
+}
+
+function axesForView(v) {
+  const r = viewRanges(v, boundFor(activeFn));
+  return {
+    colors: [0xff6b6b, 0x7ee0c0, 0x6ba8ff],
+    labels: [DIMS[v.h1].short, DIMS[v.v].short, DIMS[v.h2].short],
+    ranges: [r[v.h1], r[v.v], r[v.h2]],
+  };
+}
+
+const rebuildAllViews = rafThrottle(() => {
+  syncViewMeshes();
+  const av = views[activeIdx] || views[0];
+  if (av) {
+    const a = axesForView(av);
+    buildAxes(a.colors, a.labels, a.ranges);
+  }
+  updateRot4Labels();
+  renderViewList();
+  renderFnList();
+  renderLegend();
+  checkScaleDivergence();
+});
+
+// 量级差异提醒：按"预测显示高度"判断——某可见函数的量程占统一量程不足 8% 时，
+// 曲面高度不足满高的 8%，视觉上就是平面。比按倍数比更贴近实际观感。
+let prevDivergent = false;
+function checkScaleDivergence() {
+  if (perFn || !outAuto) { prevDivergent = false; return; }
+  const vis = functions.filter(f => f.visible);
+  if (vis.length < 2) { prevDivergent = false; return; }
+  const B = globalB();
+  let worst = null, worstFill = 1;
+  for (const fn of vis) {
+    const fill = (fn.field?.outBound || 1) / B;
+    if (fill < worstFill) { worstFill = fill; worst = fn; }
+  }
+  const divergent = worstFill < 0.08;
+  if (divergent && !prevDivergent) {
+    toast(t('scaleWarn', {expr: worst.expr}), 'err', 6000);
+  }
+  prevDivergent = divergent;
+}
+
+function renderLegend() {
+  const fns = functions.filter(f => f.visible)
+    .map(f => `<b style="color:${f.color}">●</b> <span>${escapeHtml(f.expr)}</span>`);
+  const vs = views.filter(v => v.visible).map(v => {
+    const r = viewRanges(v, boundFor(activeFn));
+    const rng = k => `${DIMS[k].short} ∈ [${fmtNum(r[k].lo)}, ${fmtNum(r[k].hi)}]`;
+    return `${DIMS[v.h1].short} × ${DIMS[v.h2].short} → ${rng(v.v)}`;
+  });
+  document.getElementById('legend').innerHTML =
+    t('legendFns', {n: functions.filter(f=>f.visible).length}) + fns.join('　') + '<br>' +
+    t('legendViews', {n: views.filter(v=>v.visible).length}) + vs.join('　｜　') + '<br>' +
+    (outAuto && perFn ? `<span style="color:#ffd166">${t('legendPerFn')}</span><br>` : '') +
+    (rot4On ? (() => { const a = views[activeIdx]; const w4 = DIM_KEYS.find(k => k !== a?.h1 && k !== a?.h2 && k !== a?.v); return `<span style="color:#c08a3e">${t('legendRot4', {a: DIMS[a?.h1]?.short, b: DIMS[a?.v]?.short, c: DIMS[a?.h2]?.short, d: DIMS[w4]?.short, e: rot4.join('°, ') + '°'})}</span><br>`; })() : '') +
+    (stereoOn ? `<span style="color:#7fd8e9">${t('legendStereo', {a: stereoBase, b: stereoTarget === 'mid' ? t('legendStereoMid') : stereoTarget === 'L' ? t('legendStereoL') : t('legendStereoR')})}</span><br>` : '') +
+    `<span style="color:#6c7a95">${t('legendAxis')}</span>`;
+}
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+// ================= 左侧 UI：视角 =================
+const selH1 = document.getElementById('sel-h1');
+const selH2 = document.getElementById('sel-h2');
+const selV  = document.getElementById('sel-v');
+const opSlider = document.getElementById('opacity');
+for (const sel of [selH1, selH2, selV]) {
+  DIM_KEYS.forEach(k => {
+    const o = document.createElement('option');
+    o.value = k; o.textContent = t(DIMS[k].labelKey);
+    sel.appendChild(o);
+  });
+}
+
+function syncSelects() {
+  const v = views[activeIdx];
+  if (v) { selH1.value = v.h1; selH2.value = v.h2; selV.value = v.v; }
+}
+
+function refreshActiveView() {
+  const v = views[activeIdx];
+  if (v && new Set([selH1.value, selH2.value, selV.value]).size === 3) {
+    v.h1 = selH1.value; v.h2 = selH2.value; v.v = selV.value;
+    for (let fi = 0; fi < functions.length; fi++) updateFnViewMesh(v, fi);
+  }
+  const av = views[activeIdx];
+  if (av) {
+    const a = axesForView(av);
+    buildAxes(a.colors, a.labels, a.ranges);
+  }
+  renderViewList();
+  renderLegend();
+}
+[selH1, selH2, selV].forEach(s => s.addEventListener('change', refreshActiveView));
+
+document.querySelectorAll('.btns button[data-preset]').forEach(b => {
+  b.onclick = () => {
+    const [a, c, d] = b.dataset.preset.split(',');
+    selH1.value = a; selH2.value = c; selV.value = d;
+    refreshActiveView();
+  };
+});
+const btnWire = document.getElementById('btn-wire');
+btnWire.onclick = () => {
+  wireMode = !wireMode;
+  btnWire.classList.toggle('active', wireMode);
+  btnWire.setAttribute('aria-pressed', String(wireMode));
+  for (const v of views) for (const m of v.meshes.values()) {
+    if (wireMode && m.mesh.visible) { ensureWire(m); m.wire.visible = true; }
+    else if (m.wire) m.wire.visible = false;
+    if (wireMode && m.meshR && m.meshR.visible) { ensureWireR(m); m.wireR.visible = true; }
+    else if (m.wireR) m.wireR.visible = false;
+  }
+  invalidate();
+};
+const btnGrid = document.getElementById('btn-grid');
+btnGrid.onclick = () => {
+  setGridsVisible(!grid.visible);
+  btnGrid.classList.toggle('active', grid.visible);
+  btnGrid.setAttribute('aria-pressed', String(grid.visible));
+};
+const btnRotate = document.getElementById('btn-rotate');
+btnRotate.onclick = () => {
+  controls.autoRotate = !controls.autoRotate;
+  controls.autoRotateSpeed = 1.2;
+  controlsR.autoRotate = controls.autoRotate;   // 双眼模式下两眼一起自动旋转
+  btnRotate.classList.toggle('active', controls.autoRotate);
+  btnRotate.setAttribute('aria-pressed', String(controls.autoRotate));
+  invalidate();
+};
+document.getElementById('btn-reset').onclick = resetCamera;
+function resetCamera() {
+  camera.position.copy(HOME_POS);
+  controls.target.copy(HOME_TARGET);
+  controls.update();
+  if (stereoOn) {   // 双眼模式下两只眼各自复位
+    cameraR.position.copy(HOME_POS);
+    controlsR.target.copy(HOME_TARGET);
+    controlsR.update();
+  }
+  invalidate();
+}
+renderer.domElement.addEventListener('dblclick', resetCamera);
+rendererR.domElement.addEventListener('dblclick', resetCamera);
+
+// ---------- 4D 旋转 ----------
+// 角度顺序（相对当前视角的槽位）：0:h1↔v 1:h1↔h2 2:h1↔w 3:v↔h2 4:v↔w 5:h2↔w
+let rot4On = false;
+const rot4 = [0, 0, 0, 0, 0, 0];          // 当前显示角度（度）——动画插值中的中间值
+const rot4Target = [0, 0, 0, 0, 0, 0];    // 目标角度：滑杆/输入框设定后由动画循环平滑过渡
+let rot4SinCos = [];
+
+// ---------- 双眼模式 ----------
+// 四维空间中一对相对距离固定的"眼睛"，各自投影出一张三维图并排显示。
+// 姿态模型：rot4 = 中间姿态；dL/dR = 各眼相对中间姿态的偏移；
+// 默认 dL[5]=-base/2、dR[5]=+base/2（在 h2↔w 平面分离，即第四维上的"瞳距"）。
+// 旋转目标 mid：改 rot4（两眼对称变化）；L/R：只改对应眼的偏移，另一眼不动。
+let stereoOn = false;
+let stereoBase = 15;        // 双眼基线（度），两眼分离角
+let stereoTarget = 'mid';   // 旋转目标：mid / L / R
+let dL = [0,0,0,0,0,0], dR = [0,0,0,0,0,0];
+let dLT = [0,0,0,0,0,0], dRT = [0,0,0,0,0,0];   // 各眼偏移的目标值（平滑动画用）
+let rotL = [0,0,0,0,0,0];   // 左眼绝对角度
+let rotR = [0,0,0,0,0,0];   // 右眼绝对角度
+let sinCosL = [], sinCosR = [];
+function anglesToSinCos(arr) {
+  const out = [];
+  for (const d of arr) {
+    const r = d * Math.PI / 180;
+    out.push(Math.cos(r), Math.sin(r));
+  }
+  return out;
+}
+function computeStereoAngles() {
+  const half = stereoBase / 2;
+  for (let i = 0; i < 6; i++) {
+    rotL[i] = rot4[i] + dL[i];
+    rotR[i] = rot4[i] + dR[i];
+  }
+  // 基线叠加在 h2↔w 槽位（5）上
+  rotL[5] -= half;
+  rotR[5] += half;
+  sinCosL = anglesToSinCos(rotL);
+  sinCosR = anglesToSinCos(rotR);
+}
+// 目标眼当前显示角度（供滑杆/输入框）
+function stereoShownAngle(i) {
+  if (stereoTarget === 'L') return rotL[i];
+  if (stereoTarget === 'R') return rotR[i];
+  return rot4[i];
+}
+// 目标值版本（动画进行中，滑杆/输入框显示目标角度而非中间插值）
+function stereoShownTarget(i) {
+  if (stereoTarget === 'L') return rot4Target[i] + dLT[i];
+  if (stereoTarget === 'R') return rot4Target[i] + dRT[i];
+  return rot4Target[i];
+}
+function computeRot4SinCos() {
+  rot4SinCos = anglesToSinCos(rot4);
+  computeStereoAngles();
+}
+computeRot4SinCos();
+
+const btnRot4 = document.getElementById('btn-rot4');
+const rot4Box = document.getElementById('rot4-box');
+btnRot4.onclick = () => {
+  rot4On = !rot4On;
+  if (!rot4On && stereoOn) toggleStereo(false); // 关 4D 时联动关双眼
+  btnRot4.classList.toggle('active', rot4On);
+  btnRot4.setAttribute('aria-pressed', String(rot4On));
+  rot4Box.style.display = rot4On ? 'block' : 'none';
+  setAxesVisible(!rot4On);    // 旋转后轴刻度不再对应单一维度，隐藏坐标轴
+  rebuildAllViews();
+  if (rot4On) toast(t('rot4OnToast'), 'ok', 3000);
+};
+function updateRot4Labels() {
+  const v = views[activeIdx];
+  if (!v) return;
+  const w4 = DIM_KEYS.find(k => k !== v.h1 && k !== v.h2 && k !== v.v);
+  const labels = [
+    `${DIMS[v.h1].short}↔${DIMS[v.v].short}`,
+    `${DIMS[v.h1].short}↔${DIMS[v.h2].short}`,
+    `${DIMS[v.h1].short}↔${DIMS[w4].short}`,
+    `${DIMS[v.v].short}↔${DIMS[v.h2].short}`,
+    `${DIMS[v.v].short}↔${DIMS[w4].short}`,
+    `${DIMS[v.h2].short}↔${DIMS[w4].short}`,
+  ];
+  labels.forEach((lbl, i) => {
+    document.getElementById('rot-l' + i).textContent = lbl;
+    document.getElementById('rot-n' + i).setAttribute('aria-label', t('rotAngleAria', {n: i}));
+    document.getElementById('rot-a' + i).setAttribute('aria-label', t('rotAngleAria', {n: i}));
+  });
+}
+// 设置第 i 个平面角度（deg）。双眼模式下按目标路由：mid 改中间姿态（两眼对称），L/R 只改一只眼
+function setRot4Angle(i, deg) {
+  if (!isFinite(deg) || deg < -180 || deg > 180) { toast(t('angleError'), 'err'); return; }
+  // 只更新目标值，实际角度由动画循环平滑过渡（丝滑效果）
+  if (stereoOn) {
+    if (stereoTarget === 'L') dLT[i] = deg - rot4Target[i];
+    else if (stereoTarget === 'R') dRT[i] = deg - rot4Target[i];
+    else rot4Target[i] = deg;
+  } else {
+    rot4Target[i] = deg;
+  }
+  refreshAngleUI(i);
+  renderLegend();
+}
+function refreshAngleUI(i) {
+  const shown = Math.round((stereoOn ? stereoShownTarget(i) : rot4Target[i]) * 10) / 10;
+  document.getElementById('rot-a' + i).value = shown;
+  document.getElementById('rot-n' + i).value = shown;
+  document.getElementById('rot-v' + i).textContent = shown + '°';
+}
+for (let i = 0; i < 6; i++) {
+  const slider = document.getElementById('rot-a' + i);
+  const numbox = document.getElementById('rot-n' + i);
+  slider.addEventListener('input', rafThrottle(() => setRot4Angle(i, parseFloat(slider.value))));
+  numbox.addEventListener('change', () => setRot4Angle(i, parseFloat(numbox.value)));
+}
+document.getElementById('btn-rot4-reset').onclick = () => {
+  for (let i = 0; i < 6; i++) {
+    rot4Target[i] = 0;
+    dLT[i] = 0; dRT[i] = 0;
+    document.getElementById('rot-a' + i).value = 0;
+    document.getElementById('rot-n' + i).value = 0;
+    document.getElementById('rot-v' + i).textContent = '0°';
+  }
+  renderLegend();
+  // 角度由动画循环平滑过渡回 0
+};
+updateRot4Labels();
+
+// ---------- 域着色开关 ----------
+const btnDc = document.getElementById('btn-dc');
+btnDc.onclick = () => {
+  domainColorOn = !domainColorOn;
+  btnDc.classList.toggle('active', domainColorOn);
+  btnDc.setAttribute('aria-pressed', String(domainColorOn));
+  rebuildAllViews();
+  if (domainColorOn) toast(t('dcOnToast'), 'ok', 3000);
+};
+
+// ---------- 双眼模式 ----------
+const btnStereo = document.getElementById('btn-stereo');
+const stereoBox = document.getElementById('stereo-box');
+// 右屏幕挂独立的 OrbitControls 控制右眼相机：左右两幅图可分别拖拽旋转
+const controlsR = new OrbitControls(cameraR, rendererR.domElement);
+controlsR.enableDamping = true;
+controlsR.dampingFactor = 0.08;
+controlsR.minDistance = 3;
+controlsR.maxDistance = 40;
+controlsR.addEventListener('change', invalidate);
+function toggleStereo(on) {
+  stereoOn = on;
+  if (on) {
+    // 开启双眼时，右眼相机先跟随左眼当前姿态；之后左右各自独立拖拽
+    cameraR.position.copy(camera.position);
+    cameraR.quaternion.copy(camera.quaternion);
+    controlsR.target.copy(controls.target);
+    controlsR.update();
+  }
+  if (stereoOn && !rot4On) {   // 双眼依赖 4D 旋转管线，自动开启
+    rot4On = true;
+    btnRot4.classList.add('active');
+    btnRot4.setAttribute('aria-pressed', 'true');
+    rot4Box.style.display = 'block';
+    setAxesVisible(false);
+  }
+  btnStereo.classList.toggle('active', stereoOn);
+  btnStereo.setAttribute('aria-pressed', String(stereoOn));
+  stereoBox.style.display = stereoOn ? 'block' : 'none';
+  applyScreenLayout(stereoOn);   // 切换左右分屏布局
+  // 同步滑杆显示到当前目标眼的角度
+  refreshRot4UI();
+  rebuildAllViews();
+  if (stereoOn) toast(t('stereoOnToast'), 'ok', 3500);
+}
+function refreshRot4UI() {
+  for (let i = 0; i < 6; i++) {
+    const shown = Math.round((stereoOn ? stereoShownTarget(i) : rot4Target[i]) * 10) / 10;
+    document.getElementById('rot-a' + i).value = shown;
+    document.getElementById('rot-n' + i).value = shown;
+    document.getElementById('rot-v' + i).textContent = shown + '°';
+  }
+}
+btnStereo.onclick = () => toggleStereo(!stereoOn);
+document.getElementById('stereo-target').addEventListener('change', e => {
+  stereoTarget = e.target.value;
+  refreshRot4UI();
+  toast(stereoTarget === 'mid' ? t('targetMidToast')
+      : stereoTarget === 'L' ? t('targetLToast')
+      : t('targetRToast'), 'ok', 2200);
+});
+document.getElementById('stereo-base').addEventListener('input', rafThrottle(function () {
+  stereoBase = parseFloat(this.value);
+  document.getElementById('stereo-base-val').textContent = stereoBase + '°';
+  computeStereoAngles();
+  views.forEach(v => { for (let fi = 0; fi < functions.length; fi++) updateFnViewMesh(v, fi); });
+}.bind(document.getElementById('stereo-base'))));
+// 简介弹窗
+const infoModal = document.getElementById('info-modal');
+document.getElementById('btn-stereo-info').onclick = () => infoModal.classList.add('show');
+document.getElementById('info-close').onclick = () => infoModal.classList.remove('show');
+infoModal.addEventListener('click', e => { if (e.target === infoModal) infoModal.classList.remove('show'); });
+
+// ---------- 参数 t 扫描 ----------
+function resampleAll() {
+  functions.forEach(fn => {
+    try { fn.field = compileAndSample(fn.expr); }
+    catch (e) { /* 保留旧场 */ }
+  });
+  rebuildAllViews();
+}
+const tResample = rafThrottle(() => resampleAll());
+function syncTUI() {
+  document.getElementById('t-slider').value = T;
+  document.getElementById('t-num').value = Math.round(T * 10) / 10;
+  document.getElementById('t-show').textContent = Math.round(T * 10) / 10;
+}
+function setT(val) {
+  if (!isFinite(val)) { toast(t('paramError'), 'err'); return; }
+  T = Math.min(Math.max(val, -5), 5);
+  syncTUI();
+  tResample();
+}
+document.getElementById('t-slider').addEventListener('input', rafThrottle(function () { setT(parseFloat(this.value)); }.bind(document.getElementById('t-slider'))));
+document.getElementById('t-num').addEventListener('change', function () { setT(parseFloat(this.value)); }.bind(document.getElementById('t-num')));
+const tPlayBtn = document.getElementById('t-play');
+tPlayBtn.onclick = () => {
+  tPlaying = !tPlaying;
+  tPlayBtn.textContent = tPlaying ? t('pause') : t('play2');
+};
+
+// ---------- 预设画廊 ----------
+const SCENES = [
+  { name: 'x² 抛物面（默认）', domain: 3, fns: ['x^2'], views: [['rew','imw','ref']] },
+  { name: 'x³ 三视图', domain: 3, fns: ['x^3'], views: [['rew','imw','ref'],['rew','imw','imf'],['rew','ref','imf']] },
+  { name: 'exp(x) 实虚对照', domain: 3, fns: ['exp(x)'], views: [['rew','imw','ref'],['rew','imw','imf']] },
+  { name: '1/x 极点（域着色）', domain: 3, dc: true, fns: ['1/x'], views: [['rew','imw','mod']] },
+  { name: 'x² 对比 x³', domain: 3, perFn: true, fns: ['x^2','x^3'], views: [['rew','imw','ref']] },
+  { name: 'sin(x) 大范围（域着色）', domain: 8, dc: true, fns: ['sin(x)'], views: [['rew','imw','ref']] },
+  { name: '(x-i)/(x+i) 与极点', domain: 4, dc: true, fns: ['(x-i)/(x+i)'], views: [['rew','imw','mod'],['rew','ref','imf']] },
+  { name: '4D 旋转演示：x²', domain: 3, rot4: { on: true, angles: [0,0,90,0,0,0] }, fns: ['x^2'], views: [['rew','imw','ref']] },
+  { name: '参数扫描：x^t', domain: 3, t: 2, fns: ['x^t'], views: [['rew','imw','ref']] },
+  { name: 'sin(t·x) 振荡扫描', domain: 3, t: 1, fns: ['sin(t*x)'], views: [['rew','imw','ref']] },
+];
+const presetSel = document.getElementById('preset-sel');
+SCENES.forEach((s, i) => {
+  const o = document.createElement('option');
+  o.value = i; o.textContent = t('scene_' + i);
+  presetSel.appendChild(o);
+});
+presetSel.addEventListener('change', () => {
+  const i = parseInt(presetSel.value);
+  if (i >= 0 && i < SCENES.length) loadScene(SCENES[i]);
+});
+
+// 语言切换时重建所有动态生成的下拉选项（保留当前选中值）
+function rebuildSelectOptions() {
+  // 维度下拉框
+  for (const sel of [selH1, selH2, selV]) {
+    const cur = sel.value;
+    sel.innerHTML = '';
+    DIM_KEYS.forEach(k => {
+      const o = document.createElement('option');
+      o.value = k; o.textContent = t(DIMS[k].labelKey);
+      sel.appendChild(o);
+    });
+    sel.value = cur;
+  }
+  // 预设场景下拉框
+  const curPreset = presetSel.value;
+  presetSel.innerHTML = '';
+  const ph = document.createElement('option');
+  ph.value = -1; ph.textContent = t('choosePreset');
+  presetSel.appendChild(ph);
+  SCENES.forEach((s, i) => {
+    const o = document.createElement('option');
+    o.value = i; o.textContent = t('scene_' + i);
+    presetSel.appendChild(o);
+  });
+  presetSel.value = curPreset;
+}
+function loadScene(s) {
+  tPlaying = false; tPlayBtn.textContent = t('play2');
+  views.forEach(disposeViewMeshes);
+  functions = [];
+  views = s.views.map(([h1, h2, v]) => ({ h1, h2, v, visible: true, meshes: new Map() }));
+  activeIdx = 0; activeFn = 0;
+  DOMAIN = s.domain ?? 3;
+  document.getElementById('domain-num').value = DOMAIN;
+  const dlo = parseFloat(domainSlider.min) || 0.1, dhi = parseFloat(domainSlider.max) || 100;
+  domainSlider.value = Math.min(Math.max(DOMAIN, dlo), dhi);
+  if (s.t !== undefined) { T = s.t; }
+  syncTUI();
+  perFn = !!s.perFn;
+  document.getElementById('per-fn').checked = perFn;
+  domainColorOn = !!s.dc;
+  btnDc.classList.toggle('active', domainColorOn);
+  btnDc.setAttribute('aria-pressed', String(domainColorOn));
+  if (s.rot4) {
+    for (let i = 0; i < 6; i++) {
+      rot4[i] = s.rot4.angles[i] || 0;
+      rot4Target[i] = rot4[i];
+      document.getElementById('rot-a' + i).value = rot4[i];
+      document.getElementById('rot-n' + i).value = rot4[i];
+      document.getElementById('rot-v' + i).textContent = rot4[i] + '°';
+    }
+    rot4On = !!s.rot4.on;
+  } else {
+    for (let i = 0; i < 6; i++) {
+      rot4[i] = 0;
+      rot4Target[i] = 0;
+      document.getElementById('rot-a' + i).value = 0;
+      document.getElementById('rot-n' + i).value = 0;
+      document.getElementById('rot-v' + i).textContent = '0°';
+    }
+    rot4On = false;
+  }
+  computeRot4SinCos();
+  btnRot4.classList.toggle('active', rot4On);
+  btnRot4.setAttribute('aria-pressed', String(rot4On));
+  rot4Box.style.display = rot4On ? 'block' : 'none';
+  setAxesVisible(!rot4On);
+  // 双眼状态复位
+  stereoOn = false;
+  dL = [0,0,0,0,0,0]; dR = [0,0,0,0,0,0];
+  dLT = [0,0,0,0,0,0]; dRT = [0,0,0,0,0,0];
+  stereoTarget = 'mid';
+  document.getElementById('stereo-target').value = 'mid';
+  btnStereo.classList.remove('active');
+  btnStereo.setAttribute('aria-pressed', 'false');
+  stereoBox.style.display = 'none';
+  computeStereoAngles();
+  s.fns.forEach(e => addFn(e));
+  syncSelects();
+  updateRot4Labels();
+  rebuildAllViews();
+  toast(t('loadedToast') + t('scene_' + SCENES.indexOf(s)), 'ok');
+}
+
+opSlider.addEventListener('input', rafThrottle(() => {
+  const o = parseFloat(opSlider.value);
+  for (const v of views) for (const m of v.meshes.values()) {
+    m.mesh.material.opacity = o;
+    if (m.meshR) m.meshR.material.opacity = o;
+  }
+  invalidate();
+}));
+
+// ---------- 面板折叠 ----------
+document.getElementById('left-toggle').onclick = () => {
+  document.getElementById('left-panel').classList.toggle('collapsed');
+};
+document.getElementById('right-toggle').onclick = () => {
+  document.getElementById('right-panel').classList.toggle('collapsed');
+};
+if (matchMedia('(max-width: 720px)').matches) {
+  document.getElementById('right-panel').classList.add('collapsed');
+}
+
+// ---------- 视角列表 ----------
+const viewsEl = document.getElementById('views');
+function renderViewList() {
+  viewsEl.querySelectorAll('.item-chip, .add').forEach(e => e.remove());
+  views.forEach((v, i) => {
+    const chip = document.createElement('div');
+    chip.className = 'item-chip' + (i === activeIdx ? ' active' : '') + (v.visible ? '' : ' hidden-item');
+    chip.title = t('viewChipTitle');
+
+    const dims = document.createElement('div');
+    dims.className = 'label';
+    dims.textContent = `${DIMS[v.h1].short} × ${DIMS[v.h2].short} → ${DIMS[v.v].short}`;
+
+    const opBtn = document.createElement('button');
+    opBtn.className = 'op';
+    opBtn.textContent = v.visible ? t('hide') : t('show');
+    opBtn.addEventListener('click', e => {
+      e.stopPropagation();
+      v.visible = !v.visible;
+      // 重新按 函数可见 && 视角可见 设置
+      for (let fi = 0; fi < functions.length; fi++) {
+        const m = v.meshes.get(fi);
+        if (m) m.mesh.visible = functions[fi].visible && v.visible;
+        if (m?.wire) m.wire.visible = wireMode && m.mesh.visible;
+      }
+      renderViewList(); renderLegend(); invalidate();
+    });
+
+    const rmBtn = document.createElement('button');
+    rmBtn.className = 'rm';
+    rmBtn.textContent = '✕';
+    rmBtn.addEventListener('click', e => {
+      e.stopPropagation();
+      if (views.length <= 1) { toast(t('keepOneView'), 'err'); return; }
+      disposeViewMeshes(v);
+      views.splice(i, 1);
+      activeIdx = Math.min(activeIdx, views.length - 1);
+      syncSelects();
+      rebuildAllViews();
+    });
+
+    chip.append(dims, opBtn, rmBtn);
+    chip.addEventListener('click', () => {
+      activeIdx = i; syncSelects(); renderViewList();
+      const a = axesForView(v);
+      buildAxes(a.colors, a.labels, a.ranges);
+    });
+    viewsEl.appendChild(chip);
+  });
+
+  if (views.length < VIEW_MAX) {
+    const add = document.createElement('button');
+    add.className = 'add';
+    add.textContent = t('addView');
+    add.onclick = () => {
+      const base = views[activeIdx];
+      views.push({ h1: base.h1, h2: base.h2, v: base.v, visible: true, meshes: new Map() });
+      activeIdx = views.length - 1;
+      rebuildAllViews();
+      const altV = ['ref','imf','mod'].find(k => k !== views[activeIdx].v);
+      if (altV && views.length > 1) { selV.value = altV; refreshActiveView(); }
+    };
+    viewsEl.appendChild(add);
+  }
+}
+
+// ================= 右侧 UI：函数列表 =================
+const fnInput = document.getElementById('fn-input');
+const fnErr = document.getElementById('fn-err');
+const fnListEl = document.getElementById('fn-list');
+
+function nextFnColor() {
+  return FN_PALETTE.find(c => !functions.some(f => f.color === c)) || FN_PALETTE[functions.length % FN_PALETTE.length];
+}
+
+function compileAndSample(str) {
+  const f = compileComplex(str);
+  const S = sampleField(f);
+  if (S.validCount < 20) throw new Error(t('noValid'));
+  return S;
+}
+
+function updateFn(fi, str) {
+  try {
+    const S = compileAndSample(str);
+    functions[fi].field = S;
+    functions[fi].expr = str;
+    fnErr.textContent = '';
+    rebuildAllViews();
+    toast(t('updatedToast', {expr: str, n: S.validCount.toLocaleString()}), 'ok');
+    return true;
+  } catch (e) {
+    const msg = e.message === 'div0' ? t('divZero') : e.message;
+    fnErr.textContent = '✕ ' + msg;
+    toast(t('exprError') + msg, 'err');
+    return false;
+  }
+}
+function addFn(str) {
+  if (functions.length >= FN_MAX) { toast(t('maxFnError', {n: FN_MAX}), 'err'); return; }
+  try {
+    const S = compileAndSample(str);
+    functions.push({ expr: str, color: nextFnColor(), visible: true, field: S });
+    activeFn = functions.length - 1;
+    fnErr.textContent = '';
+    rebuildAllViews();
+    toast(t('addedToast', {expr: str, n: functions.length}), 'ok');
+  } catch (e) {
+    const msg = e.message === 'div0' ? t('divZero') : e.message;
+    fnErr.textContent = '✕ ' + msg;
+    toast(t('exprError') + msg, 'err');
+  }
+}
+
+document.getElementById('fn-apply').onclick = () => {
+  const str = fnInput.value.trim();
+  if (!str) return;
+  // “更新”永远修改当前选中的函数；“＋新”才叠加新函数
+  updateFn(activeFn, str);
+};
+document.getElementById('fn-new').onclick = () => {
+  const str = fnInput.value.trim();
+  if (str) addFn(str);
+};
+fnInput.addEventListener('keydown', ev => {
+  if (ev.key === 'Enter') document.getElementById('fn-apply').click();
+});
+document.querySelectorAll('.fn-presets button').forEach(b => {
+  b.onclick = () => { fnInput.value = b.textContent; fnInput.focus(); };
+});
+
+function renderFnList() {
+  fnListEl.querySelectorAll('.item-chip, .add').forEach(e => e.remove());
+  functions.forEach((fn, i) => {
+    const chip = document.createElement('div');
+    chip.className = 'item-chip' + (i === activeFn ? ' active' : '') + (fn.visible ? '' : ' hidden-item');
+    chip.title = t('fnChipTitle', {n: fn.field.validCount.toLocaleString()});
+
+    const swatch = document.createElement('div');
+    swatch.className = 'swatch';
+    swatch.style.background = fn.color;
+    const colorInput = document.createElement('input');
+    colorInput.type = 'color'; colorInput.value = fn.color;
+    colorInput.setAttribute('aria-label', t('fnColor'));
+    colorInput.addEventListener('input', rafThrottle(e => {
+      fn.color = e.target.value;
+      swatch.style.background = fn.color;
+      for (const v of views) {
+        const m = v.meshes.get(i);
+        if (m) m.mesh.material.color.set(fn.color);
+      }
+      renderLegend();
+    }));
+    colorInput.addEventListener('click', e => e.stopPropagation());
+    swatch.appendChild(colorInput);
+
+    const label = document.createElement('div');
+    label.className = 'label';
+    label.textContent = `f${functions.length > 1 ? i+1 : ''}(x) = ${fn.expr}`;
+
+    const opBtn = document.createElement('button');
+    opBtn.className = 'op';
+    opBtn.textContent = fn.visible ? t('hide') : t('show');
+    opBtn.addEventListener('click', e => {
+      e.stopPropagation();
+      fn.visible = !fn.visible;
+      for (const v of views) {
+        const m = v.meshes.get(i);
+        if (m) {
+          m.mesh.visible = fn.visible && v.visible;
+          if (m.wire) m.wire.visible = wireMode && m.mesh.visible;
+        }
+      }
+      // 可见函数变化会影响自动量程
+      rebuildAllViews();
+    });
+
+    const rmBtn = document.createElement('button');
+    rmBtn.className = 'rm';
+    rmBtn.textContent = '✕';
+    rmBtn.addEventListener('click', e => {
+      e.stopPropagation();
+      if (functions.length <= 1) { toast(t('keepOneFn'), 'err'); return; }
+      functions.splice(i, 1);
+      activeFn = Math.min(activeFn, functions.length - 1);
+      // 重建所有视角的 mesh 映射（索引整体前移）
+      views.forEach(v => { disposeViewMeshes(v); });
+      rebuildAllViews();
+      fnInput.value = functions[activeFn].expr;
+    });
+
+    chip.append(swatch, label, opBtn, rmBtn);
+    chip.addEventListener('click', () => {
+      activeFn = i;
+      fnInput.value = fn.expr;
+      renderFnList();
+    });
+    fnListEl.appendChild(chip);
+  });
+
+  if (functions.length < FN_MAX) {
+    const add = document.createElement('button');
+    add.className = 'add';
+    add.textContent = t('addFnList', {n: FN_MAX});
+    add.onclick = () => {
+      const str = fnInput.value.trim();
+      if (str) addFn(str);
+    };
+    fnListEl.appendChild(add);
+  }
+}
+
+// ================= 滑杆 =================
+// ---------- 绘制范围：滑杆 + 数值输入框双向联动 ----------
+const domainSlider = document.getElementById('domain');
+const domainNum = document.getElementById('domain-num');
+function applyDomain(val) {
+  if (!isFinite(val) || val <= 0) { toast(t('domainError'), 'err'); return; }
+  DOMAIN = val;
+  domainNum.value = val;
+  // 超出滑杆范围时滑杆停在边界，输入值仍生效
+  const lo = parseFloat(domainSlider.min) || 0.1, hi = parseFloat(domainSlider.max) || 100;
+  domainSlider.value = Math.min(Math.max(val, lo), hi);
+  functions.forEach(fn => {
+    try { fn.field = compileAndSample(fn.expr); }
+    catch (e) { /* 保留旧场 */ }
+  });
+  rebuildAllViews();
+}
+domainSlider.addEventListener('input', rafThrottle(() => applyDomain(parseFloat(domainSlider.value))));
+domainNum.addEventListener('change', () => applyDomain(parseFloat(domainNum.value)));
+
+const outAutoBox = document.getElementById('out-auto');
+const outSlider = document.getElementById('out-range');
+const outNum = document.getElementById('out-num');
+outAutoBox.addEventListener('change', () => {
+  outAuto = outAutoBox.checked;
+  document.getElementById('out-manual-row').style.display = outAuto ? 'none' : 'flex';
+  if (!outAuto) {
+    const cur = globalB() || 10;
+    const init = Math.min(Math.max(cur, 0.5), 100);
+    outSlider.value = init;
+    outNum.value = init;
+    manualB = init;
+  }
+  rebuildAllViews();
+});
+document.getElementById('per-fn').addEventListener('change', e => {
+  perFn = e.target.checked;
+  rebuildAllViews();
+});
+function applyManualB(val) {
+  if (!isFinite(val) || val <= 0) { toast(t('outRangeError'), 'err'); return; }
+  manualB = val;
+  outNum.value = val;
+  const lo = parseFloat(outSlider.min) || 0.5, hi = parseFloat(outSlider.max) || 100;
+  outSlider.value = Math.min(Math.max(val, lo), hi);
+  rebuildAllViews();
+}
+outSlider.addEventListener('input', rafThrottle(() => applyManualB(parseFloat(outSlider.value))));
+outNum.addEventListener('change', () => applyManualB(parseFloat(outNum.value)));
+
+// ================= 初始化 =================
+views = [{ h1: 'rew', h2: 'imw', v: 'ref', visible: true, meshes: new Map() }];
+functions = [];
+addFn('x^2');
+syncSelects();
+applyScreenLayout(false);   // 确保初始（单眼）布局正确：右屏容器隐藏，主画布可交互
+applyLang();   // 应用保存的语言设置（更新所有静态文本 + 重新渲染动态内容）
+
+// ================= 动画：按需渲染 =================
+let lastFrameTime = Date.now();
+function animate() {
+  requestAnimationFrame(animate);
+  const now = Date.now();
+  const dt = Math.min((now - lastFrameTime) / 1000, 0.1);
+  lastFrameTime = now;
+  if (tPlaying) {
+    T += T_SPEED * dt;
+    if (T > 5) T = -5;
+    syncTUI();
+    tResample();
+    needsRender = true;
+  }
+  if (controls.autoRotate || controlsR.autoRotate) needsRender = true;
+  controls.update();
+  controlsR.update();
+
+  // 4D 角度平滑动画：滑杆/输入框设定目标值后，角度指数趋近过渡（丝滑）
+  {
+    let moving = false;
+    for (let i = 0; i < 6; i++) {
+      if (Math.abs(rot4[i] - rot4Target[i]) > 0.004) { moving = true; break; }
+      if (stereoOn && (Math.abs(dL[i] - dLT[i]) > 0.004 || Math.abs(dR[i] - dRT[i]) > 0.004)) { moving = true; break; }
+    }
+    if (moving) {
+      const k = 1 - Math.exp(-14 * dt);
+      let changed = false;
+      for (let i = 0; i < 6; i++) {
+        const m4 = rot4[i] - rot4Target[i];
+        if (Math.abs(m4) > 0.004) {
+          rot4[i] -= m4 * k;
+          if (Math.abs(rot4[i] - rot4Target[i]) < 0.004) rot4[i] = rot4Target[i];
+          changed = true;
+        } else rot4[i] = rot4Target[i];
+        if (stereoOn) {
+          const mL = dL[i] - dLT[i], mR = dR[i] - dRT[i];
+          if (Math.abs(mL) > 0.004) {
+            dL[i] -= mL * k;
+            if (Math.abs(dL[i] - dLT[i]) < 0.004) dL[i] = dLT[i];
+            changed = true;
+          } else dL[i] = dLT[i];
+          if (Math.abs(mR) > 0.004) {
+            dR[i] -= mR * k;
+            if (Math.abs(dR[i] - dRT[i]) < 0.004) dR[i] = dRT[i];
+            changed = true;
+          } else dR[i] = dRT[i];
+        }
+      }
+      if (changed) {
+        computeRot4SinCos();
+        for (const v of views) for (let fi = 0; fi < functions.length; fi++) updateFnViewMesh(v, fi);
+        needsRender = true;
+        renderLegend();
+      }
+    }
+  }
+
+  if (needsRender) {
+    // 双眼：左右两块屏幕各自渲染（左右相机独立，可分别拖拽旋转）；单眼：主画布全屏
+    cameraR.updateProjectionMatrix();
+    renderer.render(scene, camera);
+    if (stereoOn) rendererR.render(sceneR, cameraR);
+    needsRender = false;
+  }
+}
+animate();
+
+addEventListener('resize', () => resizeAll());
+</script>
+</body>
+</html>
